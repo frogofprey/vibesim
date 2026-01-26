@@ -1,7 +1,0 @@
-{
-  "name": "HRM Server/Simulator",
-  "description": "A tactical-style Heart Rate Monitor using Web Bluetooth API with debug capabilities.",
-  "requestFramePermissions": [
-    "bluetooth"
-  ]
-}

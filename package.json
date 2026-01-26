@@ -1,23 +1,39 @@
 {
-  "name": "hrm-server/simulator",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "name": "vibesim",
+  "version": "1.0.0",
+  "description": "BLE Heart Rate Service scanner using Noble",
+  "main": "dist/main.js",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "test": "node dist/ble-test.js",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "server": "node dist/server.js",
+    "test-client": "node dist/test-client.js",
+    "test-server": "node dist/test-server.js",
+    "simulator": "node dist/simulator-cli.js",
+    "dashboard": "node dist/dashboard.js"
   },
+  "keywords": [
+    "ble",
+    "bluetooth",
+    "noble",
+    "heart-rate"
+  ],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "react": "^19.2.3",
-    "lucide-react": "^0.563.0",
-    "recharts": "^3.7.0",
-    "react-dom": "^19.2.3"
+    "noble-winrt": "^0.1.0",
+    "ws": "^8.16.0",
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "@types/express": "^4.17.21",
+    "typescript": "^5.3.3",
+    "vitest": "^1.0.4"
   }
 }
