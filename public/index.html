@@ -329,16 +329,25 @@
                 <div class="mode-toggle">
                     <button id="modeLive" class="mode-btn">Live</button>
                     <button id="modeSim" class="mode-btn active">Sim</button>
+                    <button id="modeReplay" class="mode-btn">Replay</button>
                 </div>
             </div>
             
-            <div class="control-group">
+            <div class="control-group" id="simProfileGroup">
                 <label>Sim Profile</label>
                 <select id="profileSelect">
                     <option value="loseWeight">Lose Weight (Zone 2)</option>
                     <option value="getFitter">Get Fitter (HIIT)</option>
                     <option value="getStronger">Get Stronger (Bursts)</option>
                     <option value="feelBetter">Feel Better (Low Intensity)</option>
+                </select>
+            </div>
+            
+            <div class="control-group" id="replayProfileGroup" style="display: none;">
+                <label>Replay Profile</label>
+                <select id="replayProfileSelect">
+                    <option value="profile1">Profile 1 (Walking)</option>
+                    <option value="profile2">Profile 2 (Fitness)</option>
                 </select>
             </div>
             
@@ -463,6 +472,7 @@
         let isRunning = false;
         let currentProfile = 'loseWeight';
         let currentNoiseVariance = 2;
+        let replayProfile = 'profile1';
         let profileParameters = {
             getFitter: { cycleLength: 60, highIntensityDuration: 20, lowHR: 120, highHR: 180 },
             loseWeight: { baseHR: 135, variationAmplitude: 5, variationPeriod: 30 },
@@ -473,7 +483,11 @@
         
         const modeLiveBtn = document.getElementById('modeLive');
         const modeSimBtn = document.getElementById('modeSim');
+        const modeReplayBtn = document.getElementById('modeReplay');
         const profileSelect = document.getElementById('profileSelect');
+        const replayProfileSelect = document.getElementById('replayProfileSelect');
+        const simProfileGroup = document.getElementById('simProfileGroup');
+        const replayProfileGroup = document.getElementById('replayProfileGroup');
         const noiseInput = document.getElementById('noiseInput');
         const startStopBtn = document.getElementById('startStopBtn');
         const logWindow = document.getElementById('logWindow');
@@ -502,6 +516,9 @@
             }
             if (state.profileParameters) {
                 profileParameters = state.profileParameters;
+            }
+            if (state.replayProfile !== undefined) {
+                replayProfile = state.replayProfile;
             }
             
             updateUI();
@@ -537,6 +554,18 @@
         modeSimBtn.addEventListener('click', () => {
             if (!isRunning) {
                 socket.emit('setMode', 'Sim');
+            }
+        });
+        
+        modeReplayBtn.addEventListener('click', () => {
+            if (!isRunning) {
+                socket.emit('setMode', 'Replay');
+            }
+        });
+        
+        replayProfileSelect.addEventListener('change', (e) => {
+            if (!isRunning) {
+                socket.emit('setReplayProfile', e.target.value);
             }
         });
         
@@ -642,13 +671,32 @@
         
         function updateUI() {
             // Update mode buttons
+            modeLiveBtn.classList.remove('active');
+            modeSimBtn.classList.remove('active');
+            modeReplayBtn.classList.remove('active');
+            
             if (currentMode === 'Live') {
                 modeLiveBtn.classList.add('active');
-                modeSimBtn.classList.remove('active');
-            } else {
+            } else if (currentMode === 'Sim') {
                 modeSimBtn.classList.add('active');
-                modeLiveBtn.classList.remove('active');
+            } else if (currentMode === 'Replay') {
+                modeReplayBtn.classList.add('active');
             }
+            
+            // Show/hide profile selectors based on mode
+            if (currentMode === 'Sim') {
+                simProfileGroup.style.display = 'flex';
+                replayProfileGroup.style.display = 'none';
+            } else if (currentMode === 'Replay') {
+                simProfileGroup.style.display = 'none';
+                replayProfileGroup.style.display = 'flex';
+            } else {
+                simProfileGroup.style.display = 'none';
+                replayProfileGroup.style.display = 'none';
+            }
+            
+            // Update replay profile select
+            replayProfileSelect.value = replayProfile;
             
             // Update profile select
             profileSelect.value = currentProfile;
@@ -687,6 +735,11 @@
             // Disable mode controls when running (but profile can change in Sim mode)
             modeLiveBtn.disabled = isRunning;
             modeSimBtn.disabled = isRunning;
+            modeReplayBtn.disabled = isRunning;
+            
+            // Disable replay profile select when running
+            replayProfileSelect.disabled = isRunning;
+            
             // Note: profileSelect.disabled is already set above based on mode and running state
         }
         

@@ -17,6 +17,7 @@ import {
   FeelBetterParams
 } from './simulator';
 import { startBLE, stopBLE, getCurrentDeviceId } from './ble-controller';
+import { startReplay, stopReplay, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
 
@@ -80,10 +81,11 @@ console.warn = (...args: any[]) => {
 };
 
 // Track current state
-let currentMode: 'Live' | 'Sim' = 'Sim';
+let currentMode: 'Live' | 'Sim' | 'Replay' = 'Sim';
 let isRunning = false;
 let currentProfile: Profile = 'loseWeight';
 let currentNoiseVariance: number = 2; // Default 2 BPM
+let replayProfile: ReplayProfile = 'profile1'; // Default replay profile
 
 // Track profile parameters for each profile
 let profileParameters: {
@@ -104,6 +106,9 @@ function getDeviceId(): string {
     const bleDeviceId = getCurrentDeviceId();
     // Return actual BLE device ID or a placeholder
     return bleDeviceId || 'ble-device-pending';
+  } else if (currentMode === 'Replay') {
+    // Replay mode: use replay-profile format
+    return `replay-${replayProfile}`;
   } else {
     // Sim mode: use profile-based device ID
     return `simulator-${currentProfile}`;
@@ -126,7 +131,7 @@ io.on('connection', (socket) => {
   socket.emit('logHistory', logMessages);
   
   // Handle mode change
-  socket.on('setMode', (mode: 'Live' | 'Sim') => {
+  socket.on('setMode', (mode: 'Live' | 'Sim' | 'Replay') => {
     if (isRunning) {
       socket.emit('error', 'Cannot change mode while running. Please stop first.');
       return;
@@ -135,7 +140,18 @@ io.on('connection', (socket) => {
     currentMode = mode;
     addLog(`Mode changed from ${oldMode} to ${mode}`);
     addLog(`Device ID will be: ${getDeviceId()}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+  });
+  
+  // Handle replay profile change
+  socket.on('setReplayProfile', (profile: ReplayProfile) => {
+    if (isRunning && currentMode === 'Replay') {
+      socket.emit('error', 'Cannot change replay profile while running. Please stop first.');
+      return;
+    }
+    replayProfile = profile;
+    addLog(`Replay profile changed to: ${profile}`);
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
   });
   
   // Handle profile change
@@ -165,7 +181,7 @@ io.on('connection', (socket) => {
         updateSimulationProfile(profile, newDeviceId, profileParams);
         addLog(`Profile changed from ${oldProfile} to ${profile} while running`);
         addLog(`Device ID updated to: ${newDeviceId}`);
-        io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+        io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
       } catch (error: any) {
         // Revert profile on error
         currentProfile = oldProfile;
@@ -178,7 +194,7 @@ io.on('connection', (socket) => {
       return;
     } else {
       addLog(`Profile changed from ${oldProfile} to ${profile}`);
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
     }
   });
   
@@ -215,7 +231,7 @@ io.on('connection', (socket) => {
         addLog(`Profile parameters updated for ${params.profile}`);
       }
       
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
     } catch (error: any) {
       socket.emit('error', `Failed to update parameters: ${error.message}`);
     }
@@ -242,7 +258,7 @@ io.on('connection', (socket) => {
       addLog(`Noise variance changed to: ${variance} BPM`);
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
   });
   
   // Handle start/stop
@@ -276,6 +292,12 @@ io.on('connection', (socket) => {
       addLog(`Simulation started with profile: ${currentProfile}`);
       addLog(`Noise variance: ${currentNoiseVariance} BPM`);
       addLog(`Device ID: ${deviceId}`);
+    } else if (currentMode === 'Replay') {
+      // Replay mode - start replay
+      const deviceId = getDeviceId();
+      addLog(`Starting replay for ${replayProfile}...`);
+      startReplay(replayProfile);
+      addLog(`Replay started. Device ID: ${deviceId}`);
     } else {
       // Live mode - start BLE scanner
       addLog('Starting BLE scanner...');
@@ -283,7 +305,7 @@ io.on('connection', (socket) => {
       addLog('BLE scanner started. Searching for HRM devices...');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
   });
   
   socket.on('stop', () => {
@@ -298,13 +320,16 @@ io.on('connection', (socket) => {
     if (currentMode === 'Sim') {
       stopSimulation();
       addLog('Simulation stopped');
+    } else if (currentMode === 'Replay') {
+      stopReplay();
+      addLog('Replay stopped');
     } else {
       // Live mode - stop BLE scanner
       stopBLE();
       addLog('BLE scanner stopped');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
   });
   
   socket.on('disconnect', () => {
@@ -327,6 +352,8 @@ process.on('SIGINT', () => {
   if (isRunning) {
     if (currentMode === 'Sim') {
       stopSimulation();
+    } else if (currentMode === 'Replay') {
+      stopReplay();
     } else {
       stopBLE();
     }
