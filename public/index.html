@@ -175,7 +175,8 @@
             color: #d4d4d4;
             padding: 15px;
             border-radius: 6px;
-            height: 400px;
+            height: calc(100vh - 280px);
+            min-height: 400px;
             overflow-y: auto;
             font-family: 'Courier New', monospace;
             font-size: 13px;
@@ -348,7 +349,26 @@
                 <select id="replayProfileSelect">
                     <option value="profile1">Profile 1 (Walking)</option>
                     <option value="profile2">Profile 2 (Fitness)</option>
+                    <option value="profile3">Profile 3 (Stationary Bike)</option>
                 </select>
+            </div>
+            
+            <div class="control-group" id="replayDataRateGroup" style="display: none;">
+                <label>Replay Data Rate (Hz)</label>
+                <input type="number" id="replayDataRateInput" min="0.1" max="2.0" step="0.1" value="1.0" style="padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; font-size: 14px; width: 100%;">
+            </div>
+            
+            <div class="control-group" id="replayInterpolationGroup" style="display: none;">
+                <label>Enable Interpolation</label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; background: white;">
+                    <input type="checkbox" id="replayInterpolationCheckbox" checked style="cursor: pointer; width: 18px; height: 18px;">
+                    <span style="font-size: 14px;">Interpolate data points</span>
+                </label>
+            </div>
+            
+            <div class="control-group" id="replaySkipAheadGroup" style="display: none;">
+                <label>Replay Control</label>
+                <button id="skipAheadBtn" class="start-stop-btn" style="width: 100%;">Skip Ahead 1 Min</button>
             </div>
             
             <div class="control-group">
@@ -459,7 +479,13 @@
                     <span class="status-indicator stopped" id="statusIndicator"></span>
                     System Log
                 </h2>
-                <button class="copy-btn" id="copyBtn">Copy to Clipboard</button>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 14px; cursor: pointer;">
+                        <input type="checkbox" id="showInterpolatedLogs" checked style="cursor: pointer;">
+                        Show Interpolated
+                    </label>
+                    <button class="copy-btn" id="copyBtn">Copy to Clipboard</button>
+                </div>
             </div>
             <div class="log-window" id="logWindow"></div>
         </div>
@@ -473,6 +499,9 @@
         let currentProfile = 'loseWeight';
         let currentNoiseVariance = 2;
         let replayProfile = 'profile1';
+        let replayDataRate = 1.0;
+        let replayEnableInterpolation = true;
+        let showInterpolatedLogs = true;
         let profileParameters = {
             getFitter: { cycleLength: 60, highIntensityDuration: 20, lowHR: 120, highHR: 180 },
             loseWeight: { baseHR: 135, variationAmplitude: 5, variationPeriod: 30 },
@@ -486,12 +515,19 @@
         const modeReplayBtn = document.getElementById('modeReplay');
         const profileSelect = document.getElementById('profileSelect');
         const replayProfileSelect = document.getElementById('replayProfileSelect');
+        const replayDataRateInput = document.getElementById('replayDataRateInput');
+        const replayInterpolationCheckbox = document.getElementById('replayInterpolationCheckbox');
+        const skipAheadBtn = document.getElementById('skipAheadBtn');
         const simProfileGroup = document.getElementById('simProfileGroup');
         const replayProfileGroup = document.getElementById('replayProfileGroup');
+        const replayDataRateGroup = document.getElementById('replayDataRateGroup');
+        const replayInterpolationGroup = document.getElementById('replayInterpolationGroup');
+        const replaySkipAheadGroup = document.getElementById('replaySkipAheadGroup');
         const noiseInput = document.getElementById('noiseInput');
         const startStopBtn = document.getElementById('startStopBtn');
         const logWindow = document.getElementById('logWindow');
         const copyBtn = document.getElementById('copyBtn');
+        const showInterpolatedLogsCheckbox = document.getElementById('showInterpolatedLogs');
         const statusIndicator = document.getElementById('statusIndicator');
         const paramsHeader = document.getElementById('paramsHeader');
         const paramsToggle = document.getElementById('paramsToggle');
@@ -519,6 +555,12 @@
             }
             if (state.replayProfile !== undefined) {
                 replayProfile = state.replayProfile;
+            }
+            if (state.replayDataRate !== undefined) {
+                replayDataRate = state.replayDataRate;
+            }
+            if (state.replayEnableInterpolation !== undefined) {
+                replayEnableInterpolation = state.replayEnableInterpolation;
             }
             
             updateUI();
@@ -566,6 +608,36 @@
         replayProfileSelect.addEventListener('change', (e) => {
             if (!isRunning) {
                 socket.emit('setReplayProfile', e.target.value);
+            }
+        });
+        
+        replayDataRateInput.addEventListener('change', (e) => {
+            const rate = parseFloat(e.target.value);
+            if (!isNaN(rate)) {
+                socket.emit('setReplayDataRate', rate);
+            }
+        });
+        
+        replayDataRateInput.addEventListener('input', (e) => {
+            // Update in real-time while typing (debounced)
+            clearTimeout(replayDataRateInput.timeout);
+            replayDataRateInput.timeout = setTimeout(() => {
+                const rate = parseFloat(e.target.value);
+                if (!isNaN(rate)) {
+                    socket.emit('setReplayDataRate', rate);
+                }
+            }, 500);
+        });
+        
+        skipAheadBtn.addEventListener('click', () => {
+            if (isRunning && currentMode === 'Replay') {
+                socket.emit('skipReplayAhead');
+            }
+        });
+        
+        replayInterpolationCheckbox.addEventListener('change', (e) => {
+            if (!isRunning) {
+                socket.emit('setReplayInterpolation', e.target.checked);
             }
         });
         
@@ -662,12 +734,39 @@
         });
         
         function addLogEntry(message, type = 'info') {
+            // Check if this is an interpolated message
+            const isInterpolated = message.includes('[Replay] Interpolated point') || 
+                                  message.includes('🔗 [Replay] Interpolated point');
+            
+            // Skip if it's interpolated and filter is off
+            if (isInterpolated && !showInterpolatedLogs) {
+                return;
+            }
+            
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             entry.textContent = message;
+            // Store whether this is interpolated for re-filtering
+            entry.dataset.isInterpolated = isInterpolated ? 'true' : 'false';
             logWindow.appendChild(entry);
             logWindow.scrollTop = logWindow.scrollHeight;
         }
+        
+        // Handle toggle change for interpolated logs
+        showInterpolatedLogsCheckbox.addEventListener('change', (e) => {
+            showInterpolatedLogs = e.target.checked;
+            
+            // Re-filter all existing log entries
+            const entries = logWindow.querySelectorAll('.log-entry');
+            entries.forEach(entry => {
+                const isInterpolated = entry.dataset.isInterpolated === 'true';
+                if (isInterpolated && !showInterpolatedLogs) {
+                    entry.style.display = 'none';
+                } else {
+                    entry.style.display = '';
+                }
+            });
+        });
         
         function updateUI() {
             // Update mode buttons
@@ -687,16 +786,40 @@
             if (currentMode === 'Sim') {
                 simProfileGroup.style.display = 'flex';
                 replayProfileGroup.style.display = 'none';
+                replayDataRateGroup.style.display = 'none';
+                replayInterpolationGroup.style.display = 'none';
+                replaySkipAheadGroup.style.display = 'none';
             } else if (currentMode === 'Replay') {
                 simProfileGroup.style.display = 'none';
                 replayProfileGroup.style.display = 'flex';
+                replayDataRateGroup.style.display = 'flex';
+                replayInterpolationGroup.style.display = 'flex';
+                replaySkipAheadGroup.style.display = 'flex';
             } else {
                 simProfileGroup.style.display = 'none';
                 replayProfileGroup.style.display = 'none';
+                replayDataRateGroup.style.display = 'none';
+                replayInterpolationGroup.style.display = 'none';
+                replaySkipAheadGroup.style.display = 'none';
             }
+            
+            // Update interpolation checkbox
+            replayInterpolationCheckbox.checked = replayEnableInterpolation;
+            
+            // Disable interpolation checkbox when running
+            replayInterpolationCheckbox.disabled = isRunning;
+            
+            // Enable/disable skip ahead button based on running state
+            skipAheadBtn.disabled = !isRunning || currentMode !== 'Replay';
             
             // Update replay profile select
             replayProfileSelect.value = replayProfile;
+            
+            // Update replay data rate input
+            replayDataRateInput.value = replayDataRate;
+            
+            // Update interpolation checkbox
+            replayInterpolationCheckbox.checked = replayEnableInterpolation;
             
             // Update profile select
             profileSelect.value = currentProfile;
@@ -739,6 +862,10 @@
             
             // Disable replay profile select when running
             replayProfileSelect.disabled = isRunning;
+            
+            // Disable replay data rate input when running (can be updated while running)
+            // Actually, allow data rate changes while running
+            replayDataRateInput.disabled = false;
             
             // Note: profileSelect.disabled is already set above based on mode and running state
         }

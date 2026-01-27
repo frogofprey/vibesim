@@ -17,7 +17,7 @@ import {
   FeelBetterParams
 } from './simulator';
 import { startBLE, stopBLE, getCurrentDeviceId } from './ble-controller';
-import { startReplay, stopReplay, ReplayProfile } from './replay-controller';
+import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
 
@@ -86,6 +86,8 @@ let isRunning = false;
 let currentProfile: Profile = 'loseWeight';
 let currentNoiseVariance: number = 2; // Default 2 BPM
 let replayProfile: ReplayProfile = 'profile1'; // Default replay profile
+let replayDataRate: number = 1.0; // Default 1Hz, max 2Hz
+let replayEnableInterpolation: boolean = true; // Default enabled
 
 // Track profile parameters for each profile
 let profileParameters: {
@@ -140,7 +142,7 @@ io.on('connection', (socket) => {
     currentMode = mode;
     addLog(`Mode changed from ${oldMode} to ${mode}`);
     addLog(`Device ID will be: ${getDeviceId()}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
   });
   
   // Handle replay profile change
@@ -151,7 +153,61 @@ io.on('connection', (socket) => {
     }
     replayProfile = profile;
     addLog(`Replay profile changed to: ${profile}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+  });
+  
+  // Handle replay data rate change
+  socket.on('setReplayDataRate', (rate: number) => {
+    if (rate < 0.1 || rate > 2.0) {
+      socket.emit('error', 'Data rate must be between 0.1 and 2.0 Hz');
+      return;
+    }
+    
+    const oldRate = replayDataRate;
+    replayDataRate = rate;
+    
+    // Update replay if running
+    if (isRunning && currentMode === 'Replay') {
+      try {
+        updateReplayDataRate(rate);
+        addLog(`Replay data rate changed from ${oldRate} to ${rate} Hz while running`);
+      } catch (error: any) {
+        replayDataRate = oldRate; // Revert on error
+        socket.emit('error', `Failed to change data rate: ${error.message}`);
+        return;
+      }
+    } else {
+      addLog(`Replay data rate changed to: ${rate} Hz`);
+    }
+    
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+  });
+  
+  // Handle skip ahead 1 minute
+  socket.on('skipReplayAhead', () => {
+    if (!isRunning || currentMode !== 'Replay') {
+      socket.emit('error', 'Replay is not running');
+      return;
+    }
+    
+    try {
+      skipAheadOneMinute();
+      addLog('Skipped ahead 1 minute in replay data');
+    } catch (error: any) {
+      socket.emit('error', `Failed to skip ahead: ${error.message}`);
+    }
+  });
+  
+  // Handle interpolation toggle
+  socket.on('setReplayInterpolation', (enabled: boolean) => {
+    if (isRunning && currentMode === 'Replay') {
+      socket.emit('error', 'Cannot change interpolation setting while replay is running. Please stop first.');
+      return;
+    }
+    
+    replayEnableInterpolation = enabled;
+    addLog(`Replay interpolation ${enabled ? 'enabled' : 'disabled'}`);
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
   });
   
   // Handle profile change
@@ -181,7 +237,7 @@ io.on('connection', (socket) => {
         updateSimulationProfile(profile, newDeviceId, profileParams);
         addLog(`Profile changed from ${oldProfile} to ${profile} while running`);
         addLog(`Device ID updated to: ${newDeviceId}`);
-        io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+        io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
       } catch (error: any) {
         // Revert profile on error
         currentProfile = oldProfile;
@@ -194,7 +250,7 @@ io.on('connection', (socket) => {
       return;
     } else {
       addLog(`Profile changed from ${oldProfile} to ${profile}`);
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
     }
   });
   
@@ -231,7 +287,7 @@ io.on('connection', (socket) => {
         addLog(`Profile parameters updated for ${params.profile}`);
       }
       
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
     } catch (error: any) {
       socket.emit('error', `Failed to update parameters: ${error.message}`);
     }
@@ -258,7 +314,7 @@ io.on('connection', (socket) => {
       addLog(`Noise variance changed to: ${variance} BPM`);
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
   });
   
   // Handle start/stop
@@ -296,7 +352,8 @@ io.on('connection', (socket) => {
       // Replay mode - start replay
       const deviceId = getDeviceId();
       addLog(`Starting replay for ${replayProfile}...`);
-      startReplay(replayProfile);
+      addLog(`Data rate: ${replayDataRate} Hz, Noise variance: ${currentNoiseVariance} BPM, Interpolation: ${replayEnableInterpolation ? 'enabled' : 'disabled'}`);
+      startReplay(replayProfile, replayDataRate, currentNoiseVariance, replayEnableInterpolation);
       addLog(`Replay started. Device ID: ${deviceId}`);
     } else {
       // Live mode - start BLE scanner
@@ -305,7 +362,7 @@ io.on('connection', (socket) => {
       addLog('BLE scanner started. Searching for HRM devices...');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
   });
   
   socket.on('stop', () => {
@@ -329,7 +386,7 @@ io.on('connection', (socket) => {
       addLog('BLE scanner stopped');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile });
+    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
   });
   
   socket.on('disconnect', () => {

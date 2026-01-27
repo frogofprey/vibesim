@@ -1,22 +1,33 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { broadcastHeartRate } from './server';
+import { generateGaussianNoise } from './simulator';
 
-export type ReplayProfile = 'profile1' | 'profile2';
+export type ReplayProfile = 'profile1' | 'profile2' | 'profile3';
 
 interface ReplayDataPoint {
   time: number;
   heartRate: number;
 }
 
+interface InterpolatedDataPoint {
+  time: number;
+  heartRate: number;
+  isOriginal: boolean; // true if from CSV, false if interpolated
+}
+
 interface ReplayState {
   profile: ReplayProfile;
   data: ReplayDataPoint[];
+  interpolatedData: InterpolatedDataPoint[];
   currentIndex: number;
   startTime: number;
   lastHeartRate: number | null;
   timeoutIds: NodeJS.Timeout[];
   isRunning: boolean;
+  dataRate: number; // Hz
+  noiseVariance: number; // BPM
+  enableInterpolation: boolean;
 }
 
 let replayState: ReplayState | null = null;
@@ -60,7 +71,14 @@ function parseCSV(filePath: string): ReplayDataPoint[] {
  * Load replay data for a profile
  */
 function loadReplayData(profile: ReplayProfile): ReplayDataPoint[] {
-  const fileName = profile === 'profile1' ? 'profile1.csv' : 'profile2.csv';
+  let fileName: string;
+  if (profile === 'profile1') {
+    fileName = 'profile1.csv';
+  } else if (profile === 'profile2') {
+    fileName = 'profile2.csv';
+  } else {
+    fileName = 'profile3.csv';
+  }
   const filePath = path.join(__dirname, '..', fileName);
   
   console.log(`Loading replay data from ${fileName}...`);
@@ -71,6 +89,88 @@ function loadReplayData(profile: ReplayProfile): ReplayDataPoint[] {
 }
 
 /**
+ * Interpolate data points to target data rate
+ * Ensures no gaps exceed 0.4 seconds (2.5Hz max effective rate)
+ */
+function interpolateDataPoints(
+  data: ReplayDataPoint[], 
+  dataRate: number,
+  enableInterpolation: boolean = true
+): InterpolatedDataPoint[] {
+  if (data.length === 0) {
+    return [];
+  }
+  
+  const interpolated: InterpolatedDataPoint[] = [];
+  
+  // If interpolation is disabled, return only original CSV points
+  if (!enableInterpolation) {
+    for (let i = 0; i < data.length; i++) {
+      interpolated.push({
+        time: data[i].time,
+        heartRate: data[i].heartRate,
+        isOriginal: true
+      });
+    }
+    return interpolated;
+  }
+  
+  // Interpolation enabled - proceed with normal interpolation logic
+  const targetInterval = 1.0 / dataRate; // seconds
+  const maxInterval = 0.4; // seconds (2.5Hz)
+  
+  for (let i = 0; i < data.length; i++) {
+    const currentPoint = data[i];
+    
+    // Always include original CSV point
+    interpolated.push({
+      time: currentPoint.time,
+      heartRate: currentPoint.heartRate,
+      isOriginal: true
+    });
+    
+    // If not the last point, interpolate to next point
+    if (i < data.length - 1) {
+      const nextPoint = data[i + 1];
+      const gap = nextPoint.time - currentPoint.time;
+      
+      if (gap > 0) {
+        // Only interpolate if gap is larger than target interval
+        // If CSV data is already at or denser than target rate, no interpolation needed
+        if (gap > targetInterval) {
+          // Determine actual interval to use
+          // Use targetInterval, but ensure no gap exceeds maxInterval (0.4s)
+          const actualInterval = Math.min(targetInterval, maxInterval);
+          
+          // Generate interpolated points
+          let t = currentPoint.time + actualInterval;
+          while (t < nextPoint.time) {
+            // Linear interpolation
+            const ratio = (t - currentPoint.time) / gap;
+            const interpolatedHR = currentPoint.heartRate + 
+              (nextPoint.heartRate - currentPoint.heartRate) * ratio;
+            
+            interpolated.push({
+              time: t,
+              heartRate: interpolatedHR,
+              isOriginal: false
+            });
+            
+            t += actualInterval;
+          }
+        }
+        // If gap <= targetInterval, CSV is already dense enough, skip interpolation
+      }
+    }
+  }
+  
+  // Sort by time to ensure correct order
+  interpolated.sort((a, b) => a.time - b.time);
+  
+  return interpolated;
+}
+
+/**
  * Schedule next HR value to be sent
  */
 function scheduleNextHR(): void {
@@ -78,9 +178,9 @@ function scheduleNextHR(): void {
     return;
   }
   
-  const { data, currentIndex, profile } = replayState;
+  const { interpolatedData, currentIndex, profile, noiseVariance } = replayState;
   
-  if (currentIndex >= data.length) {
+  if (currentIndex >= interpolatedData.length) {
     // Loop back to start
     replayState.currentIndex = 0;
     replayState.lastHeartRate = null; // Reset filter
@@ -90,45 +190,66 @@ function scheduleNextHR(): void {
     return;
   }
   
-  const currentPoint = data[currentIndex];
+  const currentPoint = interpolatedData[currentIndex];
   const deviceId = `replay-${profile}`;
+  
+  // Apply noise only to interpolated points (not original CSV points)
+  let rawHR: number;
+  if (currentPoint.isOriginal) {
+    // Raw CSV point: no noise
+    rawHR = currentPoint.heartRate;
+  } else {
+    // Interpolated point: add noise
+    rawHR = currentPoint.heartRate + generateGaussianNoise(noiseVariance);
+  }
   
   // Apply low pass filter: 0.6 * current + 0.4 * last
   let filteredHR: number;
   if (replayState.lastHeartRate !== null) {
-    filteredHR = 0.6 * currentPoint.heartRate + 0.4 * replayState.lastHeartRate;
+    filteredHR = 0.6 * rawHR + 0.4 * replayState.lastHeartRate;
   } else {
     // First measurement, no filter
-    filteredHR = currentPoint.heartRate;
+    filteredHR = rawHR;
   }
   replayState.lastHeartRate = filteredHR;
   
   const heartRate = Math.round(filteredHR);
   
+  // Log point details before broadcasting
+  if (currentPoint.isOriginal) {
+    console.log(`📊 [Replay] Original CSV point [${currentIndex}]: t=${currentPoint.time.toFixed(2)}s, HR=${currentPoint.heartRate} → filtered=${filteredHR.toFixed(1)} (no noise)`);
+  } else {
+    const noise = rawHR - currentPoint.heartRate;
+    console.log(`🔗 [Replay] Interpolated point [${currentIndex}]: t=${currentPoint.time.toFixed(2)}s, baseHR=${currentPoint.heartRate.toFixed(1)}, noise=${noise.toFixed(1)}, rawHR=${rawHR.toFixed(1)} → filtered=${filteredHR.toFixed(1)}`);
+  }
+  
   // Broadcast HR data
   broadcastHeartRate(deviceId, heartRate, 'hr');
   
-  // Calculate delay until next data point
+  // Calculate delay based on interpolation setting
   let delay: number;
-  if (currentIndex < data.length - 1) {
-    const nextPoint = data[currentIndex + 1];
-    delay = (nextPoint.time - currentPoint.time) * 1000; // Convert to milliseconds
+  if (replayState.enableInterpolation) {
+    // Interpolation enabled: use constant interval based on data rate
+    const targetInterval = 1.0 / replayState.dataRate; // seconds
+    delay = targetInterval * 1000; // Convert to milliseconds
   } else {
-    // Last point - delay before looping back to start
-    // Use the interval from second-to-last to last, or default to 1 second
-    if (data.length > 2) {
-      const prevPoint = data[data.length - 2];
-      delay = (currentPoint.time - prevPoint.time) * 1000;
-    } else if (data.length === 2) {
-      const firstPoint = data[0];
-      delay = (currentPoint.time - firstPoint.time) * 1000;
+    // Interpolation disabled: use original CSV time differences
+    if (currentIndex < interpolatedData.length - 1) {
+      const nextPoint = interpolatedData[currentIndex + 1];
+      delay = (nextPoint.time - currentPoint.time) * 1000; // Convert to milliseconds
     } else {
-      delay = 1000; // Default 1 second if only one data point
+      // Last point - use interval from previous point or default to 1 second
+      if (interpolatedData.length > 1) {
+        const prevPoint = interpolatedData[interpolatedData.length - 2];
+        delay = (currentPoint.time - prevPoint.time) * 1000;
+      } else {
+        delay = 1000; // Default 1 second
+      }
     }
   }
   
   // Ensure minimum delay of 10ms to prevent too rapid updates
-  delay = Math.max(10, delay);
+  const minDelay = Math.max(10, delay);
   
   // Increment index for next iteration
   replayState.currentIndex++;
@@ -138,7 +259,7 @@ function scheduleNextHR(): void {
     if (replayState && replayState.isRunning) {
       scheduleNextHR();
     }
-  }, delay);
+  }, minDelay);
   
   replayState.timeoutIds.push(timeoutId);
 }
@@ -146,10 +267,20 @@ function scheduleNextHR(): void {
 /**
  * Start replaying HR data from a CSV file
  */
-export function startReplay(profile: ReplayProfile): void {
+export function startReplay(
+  profile: ReplayProfile, 
+  dataRate: number = 1.0, 
+  noiseVariance: number = 2.0,
+  enableInterpolation: boolean = true
+): void {
   if (replayState && replayState.isRunning) {
     console.log('Replay already running');
     return;
+  }
+  
+  // Validate data rate
+  if (dataRate < 0.1 || dataRate > 2.0) {
+    throw new Error(`Data rate must be between 0.1 and 2.0 Hz, got ${dataRate}`);
   }
   
   // Stop any existing replay
@@ -162,17 +293,26 @@ export function startReplay(profile: ReplayProfile): void {
     throw new Error(`No data loaded for ${profile}`);
   }
   
+  // Interpolate data points (or just use original if interpolation disabled)
+  const interpolatedData = interpolateDataPoints(data, dataRate, enableInterpolation);
+  
   replayState = {
     profile,
     data,
+    interpolatedData,
     currentIndex: 0,
     startTime: Date.now(),
     lastHeartRate: null,
     timeoutIds: [],
-    isRunning: true
+    isRunning: true,
+    dataRate,
+    noiseVariance,
+    enableInterpolation
   };
   
-  console.log(`Starting replay for ${profile} with ${data.length} data points`);
+  const interpolationStatus = enableInterpolation ? 'enabled' : 'disabled';
+  console.log(`Starting replay for ${profile} with ${data.length} raw data points, ${interpolatedData.length} total points`);
+  console.log(`Data rate: ${dataRate} Hz, Noise variance: ${noiseVariance} BPM, Interpolation: ${interpolationStatus}`);
   
   // Start replaying from first data point
   scheduleNextHR();
@@ -210,4 +350,105 @@ export function isReplayRunning(): boolean {
  */
 export function getCurrentReplayProfile(): ReplayProfile | null {
   return replayState?.profile ?? null;
+}
+
+/**
+ * Update data rate while replay is running
+ */
+export function updateReplayDataRate(rate: number): void {
+  if (!replayState || !replayState.isRunning) {
+    throw new Error('Replay is not running');
+  }
+  
+  if (rate < 0.1 || rate > 2.0) {
+    throw new Error(`Data rate must be between 0.1 and 2.0 Hz, got ${rate}`);
+  }
+  
+  // Re-interpolate data with new rate
+  const interpolatedData = interpolateDataPoints(replayState.data, rate);
+  
+  // Update state
+  replayState.dataRate = rate;
+  replayState.interpolatedData = interpolatedData;
+  
+  // Reset to current time position (find closest point)
+  // For simplicity, reset to start - could be enhanced to maintain position
+  replayState.currentIndex = 0;
+  replayState.lastHeartRate = null;
+  
+  console.log(`Replay data rate updated to ${rate} Hz, ${interpolatedData.length} interpolated points`);
+}
+
+/**
+ * Update noise variance while replay is running
+ */
+export function updateReplayNoiseVariance(variance: number): void {
+  if (!replayState || !replayState.isRunning) {
+    throw new Error('Replay is not running');
+  }
+  
+  replayState.noiseVariance = variance;
+  console.log(`Replay noise variance updated to ${variance} BPM`);
+}
+
+/**
+ * Get current data rate
+ */
+export function getReplayDataRate(): number | null {
+  return replayState?.dataRate ?? null;
+}
+
+/**
+ * Update interpolation setting (only when stopped)
+ */
+export function updateReplayInterpolation(enabled: boolean): void {
+  if (replayState && replayState.isRunning) {
+    throw new Error('Cannot change interpolation setting while replay is running');
+  }
+  
+  // This will be applied when replay is next started
+  // For now, just validate the parameter
+  if (typeof enabled !== 'boolean') {
+    throw new Error('Interpolation setting must be a boolean');
+  }
+}
+
+/**
+ * Skip ahead 1 minute in the replay data
+ */
+export function skipAheadOneMinute(): void {
+  if (!replayState || !replayState.isRunning) {
+    throw new Error('Replay is not running');
+  }
+  
+  const currentPoint = replayState.interpolatedData[replayState.currentIndex];
+  const targetTime = currentPoint.time + 60; // Add 60 seconds
+  
+  // Find index where time >= targetTime
+  let newIndex = replayState.currentIndex;
+  for (let i = replayState.currentIndex; i < replayState.interpolatedData.length; i++) {
+    if (replayState.interpolatedData[i].time >= targetTime) {
+      newIndex = i;
+      break;
+    }
+  }
+  
+  // If we reached the end without finding a point, loop to start
+  if (newIndex === replayState.currentIndex && targetTime > currentPoint.time) {
+    // Check if we're near the end - if so, loop to start
+    const lastPoint = replayState.interpolatedData[replayState.interpolatedData.length - 1];
+    if (targetTime > lastPoint.time) {
+      newIndex = 0; // Loop to start
+      replayState.lastHeartRate = null; // Reset filter when looping
+    } else {
+      // Shouldn't happen, but if it does, just move to next point
+      newIndex = Math.min(replayState.currentIndex + 1, replayState.interpolatedData.length - 1);
+    }
+  }
+  
+  const oldTime = currentPoint.time;
+  const newTime = replayState.interpolatedData[newIndex].time;
+  replayState.currentIndex = newIndex;
+  
+  console.log(`Skipped ahead 1 minute: from t=${oldTime.toFixed(2)}s to t=${newTime.toFixed(2)}s`);
 }
