@@ -16,11 +16,11 @@ import {
   GetStrongerParams,
   FeelBetterParams
 } from './simulator';
-import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDeviceId, isValidBleDeviceId } from './ble-controller';
+import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDeviceId, stopHRMScan, isValidBleDeviceId } from './ble-controller';
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
-import { setScanRequestHandler, setConnectRequestHandler, WS_SERVER_PORT } from './server';
+import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, closeWebSocketServer, WS_SERVER_PORT } from './server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -504,6 +504,34 @@ setConnectRequestHandler((deviceId, reply) => {
   });
 });
 
+// Allow remote WS client to stop scan or stream by sending text "stop"
+setStopRequestHandler((reply) => {
+  if (isScanning) {
+    stopHRMScan();
+    isScanning = false;
+    io.emit('state', getFullState());
+    addLog('HRM scan stopped by remote client.');
+    reply({ action: 'stopped', what: 'scan' });
+    return;
+  }
+  if (isRunning) {
+    const mode = currentMode;
+    isRunning = false;
+    if (mode === 'Sim') {
+      stopSimulation();
+    } else if (mode === 'Replay') {
+      stopReplay();
+    } else {
+      stopBLE();
+    }
+    io.emit('state', getFullState());
+    addLog(`Stream stopped by remote client (${mode}).`);
+    reply({ action: 'stopped', what: 'stream', mode });
+    return;
+  }
+  reply({ action: 'stop_rejected', error: 'nothing_to_stop', message: 'No scan or stream active.' });
+});
+
 // Start HTTP server
 httpServer.listen(PORT, () => {
   originalLog(`\n========================================`);
@@ -513,9 +541,14 @@ httpServer.listen(PORT, () => {
   addLog(`Dashboard server started on http://localhost:${PORT}`);
 });
 
-// Handle graceful shutdown
-process.on('SIGINT', () => {
-  addLog('Shutting down dashboard server...');
+let isShuttingDown = false;
+
+// Single graceful shutdown: stop streams, close Socket.io, close HTTP server, close WebSocket server, exit(0)
+function gracefulShutdown(): void {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  addLog('Shutting down...');
   if (isRunning) {
     if (currentMode === 'Sim') {
       stopSimulation();
@@ -525,9 +558,40 @@ process.on('SIGINT', () => {
       stopBLE();
     }
   }
-  httpServer.close(() => {
+
+  const doExit = (): never => {
     process.exit(0);
+  };
+
+  // Timeout: if close callbacks don't fire (e.g. stuck connections), exit anyway
+  const forceExitTimer = setTimeout(doExit, 4000);
+
+  const onFullyClosed = (): void => {
+    clearTimeout(forceExitTimer);
+    doExit();
+  };
+
+  // Close Socket.io (disconnects all clients), then HTTP server, then WebSocket server
+  io.close(() => {
+    httpServer.close(() => {
+      closeWebSocketServer(onFullyClosed);
+    });
   });
-});
+}
+
+process.on('SIGINT', gracefulShutdown);
+
+// Press 'q' + Enter to quit without triggering shell "interrupted" state
+if (process.stdin.isTTY) {
+  process.stdin.setEncoding('utf8');
+  process.stdin.resume();
+  process.stdin.on('data', (chunk: string) => {
+    if (chunk.trim().toLowerCase() === 'q') {
+      gracefulShutdown();
+    }
+  });
+  originalLog('Press q + Enter to quit gracefully.');
+  addLog('Press q + Enter to quit gracefully (avoids interrupted state).');
+}
 
 export { addLog, io };

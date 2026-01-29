@@ -39,6 +39,13 @@ export function setConnectRequestHandler(fn: ((deviceId: string, reply: (payload
   connectRequestHandler = fn;
 }
 
+// Handler for "stop" from WS client; set by dashboard
+let stopRequestHandler: ((reply: (payload: object) => void) => void) | null = null;
+
+export function setStopRequestHandler(fn: ((reply: (payload: object) => void) => void) | null): void {
+  stopRequestHandler = fn;
+}
+
 // Create WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 
@@ -100,6 +107,14 @@ wss.on('connection', (ws: WebSocket) => {
         connectRequestHandler(deviceId, reply);
       } else {
         reply({ action: 'connect_rejected', error: 'Connect not available' });
+      }
+      return;
+    }
+    if (text === 'stop') {
+      if (stopRequestHandler) {
+        stopRequestHandler(reply);
+      } else {
+        reply({ action: 'stop_rejected', error: 'Stop not available' });
       }
     }
   });
@@ -164,14 +179,17 @@ export function getConnectedClient(): WebSocket | null {
   return connectedClient;
 }
 
-// Handle server shutdown gracefully
-process.on('SIGINT', () => {
-  console.log('\nShutting down WebSocket server...');
+/**
+ * Gracefully close the WebSocket server and connected client. Callback runs when closed.
+ * Used by dashboard for coordinated shutdown (so one process.exit(0) path).
+ */
+export function closeWebSocketServer(callback: () => void): void {
   if (connectedClient) {
     connectedClient.close();
+    connectedClient = null;
   }
   wss.close(() => {
     console.log('WebSocket server closed');
-    process.exit(0);
+    callback();
   });
-});
+}

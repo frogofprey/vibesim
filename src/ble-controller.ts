@@ -57,6 +57,7 @@ let connectByDeviceIdCallbacks: { onSuccess: () => void; onError: (error: string
 let connectByDeviceIdTargetNormalized: string | null = null;
 
 // HRM scan-only state (discovery only, no connect)
+let cancelHRMScan: (() => void) | null = null;
 let hrmScanActive = false;
 let hrmScanDiscoverHandler: ((peripheral: Peripheral) => void) | null = null;
 let hrmScanStateChangeHandler: ((state: string) => void) | null = null;
@@ -533,6 +534,7 @@ export function startHRMScan(options: HRMScanOptions): void {
   const seen = new Map<string, HRMScanDevice>(); // dedupe by address
 
   function finishScan(): void {
+    cancelHRMScan = null;
     if (!hrmScanActive) return;
     hrmScanActive = false;
     if (hrmScanTimeoutId != null) {
@@ -562,6 +564,7 @@ export function startHRMScan(options: HRMScanOptions): void {
     hrmScanOptions = null;
   }
 
+  cancelHRMScan = finishScan;
   hrmScanActive = true;
   hrmScanOptions = options;
 
@@ -616,6 +619,15 @@ export function startHRMScan(options: HRMScanOptions): void {
     noble.on('stateChange', hrmScanStateChangeHandler);
     console.log(`Noble state: ${noble.state}. HRM scan will start when powered on.`);
     hrmScanTimeoutId = setTimeout(finishScan, durationMs);
+  }
+}
+
+/**
+ * Stop HRM scan early (same cleanup as timeout). No-op if no scan active.
+ */
+export function stopHRMScan(): void {
+  if (cancelHRMScan) {
+    cancelHRMScan();
   }
 }
 
