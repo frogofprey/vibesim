@@ -22,6 +22,17 @@ npm install
 npm run build
 ```
 
+## Configuration
+
+### WebSocket server port
+
+The WebSocket server port defaults to **8080**. You can change it when starting the app:
+
+- **Environment variable:** `WS_PORT=8081 npm start` or `WS_PORT=8081 npm run dashboard`
+- **CLI argument:** `npm start -- --ws-port 8081` or `node dist/main.js --ws-port 8081`
+
+Port must be between 1 and 65535. Invalid values are ignored and the default (8080) is used.
+
 ## Usage
 
 ### Main Application
@@ -31,7 +42,7 @@ npm start
 ```
 
 This will start:
-- WebSocket server on port 8080
+- WebSocket server on port 8080 (configurable via `WS_PORT` or `--ws-port`)
 - Web Dashboard on port 3000
 
 Open your browser to `http://localhost:3000` to access the dashboard.
@@ -55,12 +66,25 @@ The script will:
 
 ### WebSocket Server
 
-The WebSocket server is automatically started when you run the BLE scanner (`npm start`). The server runs on port 8080 and enforces a single-client connection policy - if a new client connects, the existing one is automatically disconnected.
+The WebSocket server is automatically started when you run the app (`npm start` or `npm run dashboard`). The server runs on port 8080 by default (see [Configuration](#websocket-server-port)) and enforces a single-client connection policy - if a new client connects, the existing one is automatically disconnected.
 
-To run the server standalone (without BLE scanner):
+The dashboard shows the current WebSocket URL (e.g. `ws://localhost:8080`) at the top so you know what to connect to.
+
+To run the server standalone (without dashboard):
 ```bash
 npm run server
 ```
+
+#### WebSocket client commands
+
+A remote client can send plain-text messages to trigger actions:
+
+| Message | Description |
+|--------|-------------|
+| `scan` | Start a 60-second HRM device discovery scan. Results are streamed as `scan_device` and `scan_complete` JSON. Not allowed when a stream is active or a scan is already running. Reply: `scan_started` or `scan_rejected` with error. |
+| `connect:<deviceId>` | Start a live BLE session by connecting to a specific device. Example: `connect:A0:9E:1A:DD:2D:5F`. The server scans for that address (with HRM service), connects, and streams HR as normal. Device ID must be a valid BLE address (6 hex octets, e.g. `A0:9E:1A:DD:2D:5F` or `A09E1ADD2D5F`). Not allowed when a stream is active or HRM scan is in progress. Reply: `connect_started`, `connect_rejected`, or `connect_failed`. |
+
+**Connect error codes:** `session_already_active`, `scan_in_progress`, `invalid_device_id`, `device_not_found` (timeout 30s), `connection_failed`.
 
 ### Testing the WebSocket Server
 
@@ -132,13 +156,14 @@ npm run dashboard
 Then open your browser to `http://localhost:3000`
 
 **Features:**
-- **Mode Toggle**: Switch between "Live" (BLE scanner) and "Sim" (simulator) modes
-- **Profile Dropdown**: Select from four fitness profiles when in Sim mode
-- **Start/Stop Button**: Control the simulation or BLE scanner
-- **System Log Window**: Real-time scrollable log of all system messages
-- **Copy to Clipboard**: Copy all log contents with one click
+- **Mode Toggle**: Switch between Live (BLE), Sim (simulator), and Replay (CSV replay) modes
+- **WebSocket server**: Displays current WS URL and port (configurable at startup)
+- **Sim / Replay**: Profile dropdown, data rate, interpolation, skip-ahead (Replay)
+- **Scan for HRM**: 60s discovery-only scan; results shown in UI and sent to WebSocket client
+- **Start/Stop**: Control the active stream (Live, Sim, or Replay)
+- **System Log**: Real-time scrollable log; copy to clipboard
 
-The dashboard uses Socket.io for real-time communication, so all log messages from the server appear instantly in the UI.
+The dashboard uses Socket.io for real-time communication. HR data is broadcast over the WebSocket server (port 8080) to a single remote client.
 
 ## Features
 

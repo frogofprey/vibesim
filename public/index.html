@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Heart Rate Monitor Dashboard</title>
+    <title>HRM/Simulator/Replay to WS Tool</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
         * {
@@ -322,9 +322,17 @@
 </head>
 <body>
     <div class="container">
-        <h1>❤️ Heart Rate Monitor Dashboard</h1>
+        <h1>❤️ HRM/Simulator/Replay to WS Tool</h1>
         
         <div class="controls">
+            <div class="control-group">
+                <label>WebSocket server</label>
+                <div style="padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; background: #f9f9f9; font-family: monospace; font-size: 14px;">
+                    <span id="wsUrlDisplay">ws://localhost:8080</span>
+                    <span id="wsPortDisplay" style="color: #666;"> (port 8080)</span>
+                    <div style="font-size: 12px; color: #666; margin-top: 4px;">Set WS_PORT or --ws-port at startup to change.</div>
+                </div>
+            </div>
             <div class="control-group">
                 <label>Mode</label>
                 <div class="mode-toggle">
@@ -380,6 +388,16 @@
                 <label>Control</label>
                 <button id="startStopBtn" class="start-stop-btn start">Start</button>
             </div>
+            
+            <div class="control-group">
+                <label>Scan</label>
+                <button id="scanHRMBtn" class="start-stop-btn" style="background: #2196f3; color: white; width: 100%;">Scan for HRM</button>
+            </div>
+        </div>
+        
+        <div class="control-group" id="scanResultsGroup" style="margin-bottom: 20px; display: none;">
+            <label>Last scan results</label>
+            <div id="scanResultsList" style="background: #f5f5f5; padding: 12px; border-radius: 6px; max-height: 120px; overflow-y: auto; font-size: 13px; font-family: monospace;"></div>
         </div>
         
         <!-- Profile Parameters (Collapsible) -->
@@ -496,12 +514,15 @@
         
         let currentMode = 'Sim';
         let isRunning = false;
+        let wsServerPort = 8080;
+        let isScanning = false;
         let currentProfile = 'loseWeight';
         let currentNoiseVariance = 2;
         let replayProfile = 'profile1';
         let replayDataRate = 1.0;
         let replayEnableInterpolation = true;
         let showInterpolatedLogs = true;
+        let lastScanDevices = [];
         let profileParameters = {
             getFitter: { cycleLength: 60, highIntensityDuration: 20, lowHR: 120, highHR: 180 },
             loseWeight: { baseHR: 135, variationAmplitude: 5, variationPeriod: 30 },
@@ -525,6 +546,11 @@
         const replaySkipAheadGroup = document.getElementById('replaySkipAheadGroup');
         const noiseInput = document.getElementById('noiseInput');
         const startStopBtn = document.getElementById('startStopBtn');
+        const scanHRMBtn = document.getElementById('scanHRMBtn');
+        const scanResultsGroup = document.getElementById('scanResultsGroup');
+        const scanResultsList = document.getElementById('scanResultsList');
+        const wsUrlDisplay = document.getElementById('wsUrlDisplay');
+        const wsPortDisplay = document.getElementById('wsPortDisplay');
         const logWindow = document.getElementById('logWindow');
         const copyBtn = document.getElementById('copyBtn');
         const showInterpolatedLogsCheckbox = document.getElementById('showInterpolatedLogs');
@@ -545,6 +571,14 @@
         socket.on('state', (state) => {
             currentMode = state.mode;
             isRunning = state.isRunning;
+            if (state.wsServerPort !== undefined) {
+                wsServerPort = state.wsServerPort;
+                if (wsUrlDisplay) wsUrlDisplay.textContent = `ws://localhost:${wsServerPort}`;
+                if (wsPortDisplay) wsPortDisplay.textContent = ` (port ${wsServerPort})`;
+            }
+            if (state.isScanning !== undefined) {
+                isScanning = state.isScanning;
+            }
             const oldProfile = currentProfile;
             currentProfile = state.profile;
             if (state.noiseVariance !== undefined) {
@@ -584,6 +618,31 @@
         
         socket.on('error', (error) => {
             showToast(error);
+        });
+        
+        socket.on('scanDevice', (device) => {
+            lastScanDevices.push(device);
+            if (scanResultsList) {
+                const line = document.createElement('div');
+                line.textContent = `${device.name} — ${device.deviceId}`;
+                scanResultsList.appendChild(line);
+            }
+        });
+        
+        socket.on('scanComplete', (data) => {
+            lastScanDevices = data.devices || [];
+            if (scanResultsGroup) scanResultsGroup.style.display = 'flex';
+            if (scanResultsList) {
+                const pre = document.createElement('pre');
+                pre.style.margin = '0';
+                pre.style.whiteSpace = 'pre-wrap';
+                pre.textContent = lastScanDevices.length === 0
+                    ? 'No HRM devices found.'
+                    : lastScanDevices.map(d => `${d.name} — ${d.deviceId}`).join('\n');
+                scanResultsList.innerHTML = '';
+                scanResultsList.appendChild(pre);
+            }
+            showToast(`Scan complete: ${lastScanDevices.length} device(s) found.`);
         });
         
         // UI event handlers
@@ -724,6 +783,15 @@
             }
         });
         
+        scanHRMBtn.addEventListener('click', () => {
+            if (!isRunning && !isScanning) {
+                lastScanDevices = [];
+                if (scanResultsGroup) scanResultsGroup.style.display = 'flex';
+                if (scanResultsList) scanResultsList.innerHTML = '';
+                socket.emit('startHRMScan');
+            }
+        });
+        
         copyBtn.addEventListener('click', () => {
             const logText = logWindow.innerText;
             navigator.clipboard.writeText(logText).then(() => {
@@ -854,6 +922,10 @@
                 statusIndicator.classList.remove('running');
                 statusIndicator.classList.add('stopped');
             }
+            
+            // Scan for HRM button: disabled when stream active or scan in progress
+            scanHRMBtn.disabled = isRunning || isScanning;
+            scanHRMBtn.textContent = isScanning ? 'Scanning…' : 'Scan for HRM';
             
             // Disable mode controls when running (but profile can change in Sim mode)
             modeLiveBtn.disabled = isRunning;

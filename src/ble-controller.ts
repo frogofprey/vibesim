@@ -1,5 +1,32 @@
 import noble, { Peripheral, Service, Characteristic } from 'noble-winrt';
-import { broadcastHeartRate } from './server';
+import { broadcastHeartRate, broadcastScanResult } from './server';
+
+export interface HRMScanDevice {
+  name: string;
+  deviceId: string;
+}
+
+export interface HRMScanOptions {
+  durationMs: number;
+  onDevice?: (device: HRMScanDevice) => void;
+  onComplete?: (devices: HRMScanDevice[]) => void;
+}
+
+/**
+ * Normalize BLE address to 12-char lowercase hex (strip colons/dashes).
+ * Returns empty string if not exactly 12 hex chars.
+ */
+function normalizeAddress(addr: string): string {
+  const hex = (addr || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  return hex.length === 12 ? hex : '';
+}
+
+/**
+ * Validate device ID as a BLE address (6 octets = 12 hex digits, optional colons).
+ */
+export function isValidBleDeviceId(deviceId: string): boolean {
+  return normalizeAddress(deviceId).length === 12;
+}
 
 // Heart Rate Service UUID
 const HEART_RATE_SERVICE_UUID = '180d';
@@ -20,6 +47,21 @@ let nobleScanStopHandler: (() => void) | null = null;
 let disconnectHandler: ((error?: string) => void) | null = null;
 let readHandler: ((data: Buffer, isNotification: boolean) => void) | null = null;
 let heartRateCharacteristic: Characteristic | null = null;
+
+// Connect-by-device-id state (scan for specific address then connect)
+const CONNECT_BY_ID_TIMEOUT_MS = 30000;
+let connectByDeviceIdDiscoverHandler: ((peripheral: Peripheral) => void) | null = null;
+let connectByDeviceIdStateChangeHandler: ((state: string) => void) | null = null;
+let connectByDeviceIdTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let connectByDeviceIdCallbacks: { onSuccess: () => void; onError: (error: string) => void } | null = null;
+let connectByDeviceIdTargetNormalized: string | null = null;
+
+// HRM scan-only state (discovery only, no connect)
+let hrmScanActive = false;
+let hrmScanDiscoverHandler: ((peripheral: Peripheral) => void) | null = null;
+let hrmScanStateChangeHandler: ((state: string) => void) | null = null;
+let hrmScanTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let hrmScanOptions: HRMScanOptions | null = null;
 
 /**
  * Decode Heart Rate Measurement data according to BLE HRM specification
@@ -91,10 +133,18 @@ function handleDisconnect(peripheral: Peripheral): void {
   disconnectHandler = null;
 }
 
+export interface ConnectCallbacks {
+  onConnectionFailure?: () => void;
+  onConnectionSuccess?: () => void;
+}
+
 /**
  * Connect to a peripheral and set up heart rate monitoring
  */
-function connectToPeripheral(peripheral: Peripheral): void {
+function connectToPeripheral(peripheral: Peripheral, callbacks?: ConnectCallbacks): void {
+  const onFail = callbacks?.onConnectionFailure;
+  const onSuccess = callbacks?.onConnectionSuccess;
+
   disconnectHandler = (error?: string) => {
     if (error) {
       console.error(`Disconnect error: ${error}`);
@@ -108,6 +158,7 @@ function connectToPeripheral(peripheral: Peripheral): void {
   peripheral.connect((error) => {
     if (error) {
       console.error(`Connection error: ${error}`);
+      onFail?.();
       return;
     }
     
@@ -120,6 +171,7 @@ function connectToPeripheral(peripheral: Peripheral): void {
       if (error) {
         console.error(`Service discovery error: ${error}`);
         peripheral.disconnect();
+        onFail?.();
         return;
       }
       
@@ -132,6 +184,7 @@ function connectToPeripheral(peripheral: Peripheral): void {
       if (!heartRateService) {
         console.error('Heart Rate Service not found');
         peripheral.disconnect();
+        onFail?.();
         return;
       }
       
@@ -140,6 +193,7 @@ function connectToPeripheral(peripheral: Peripheral): void {
         if (error) {
           console.error(`Characteristic discovery error: ${error}`);
           peripheral.disconnect();
+          onFail?.();
           return;
         }
         
@@ -152,6 +206,7 @@ function connectToPeripheral(peripheral: Peripheral): void {
         if (!heartRateCharacteristic) {
           console.error('Heart Rate Measurement characteristic not found');
           peripheral.disconnect();
+          onFail?.();
           return;
         }
         
@@ -160,10 +215,12 @@ function connectToPeripheral(peripheral: Peripheral): void {
           if (error) {
             console.error(`Subscribe error: ${error}`);
             peripheral.disconnect();
+            onFail?.();
             return;
           }
           
           console.log('Subscribed to heart rate notifications');
+          onSuccess?.();
         });
         
         // Handle heart rate data notifications
@@ -313,6 +370,118 @@ export function stopBLE(): void {
   console.log('BLE scanner stopped');
 }
 
+function cleanupConnectByDeviceId(): void {
+  if (connectByDeviceIdTimeoutId != null) {
+    clearTimeout(connectByDeviceIdTimeoutId);
+    connectByDeviceIdTimeoutId = null;
+  }
+  if (connectByDeviceIdDiscoverHandler != null) {
+    noble.removeListener('discover', connectByDeviceIdDiscoverHandler);
+    connectByDeviceIdDiscoverHandler = null;
+  }
+  if (connectByDeviceIdStateChangeHandler != null) {
+    noble.removeListener('stateChange', connectByDeviceIdStateChangeHandler);
+    connectByDeviceIdStateChangeHandler = null;
+  }
+  connectByDeviceIdTargetNormalized = null;
+  connectByDeviceIdCallbacks = null;
+}
+
+/**
+ * Start a live BLE session by connecting to a specific device address (e.g. from WS "connect:...").
+ * Scans until the device is seen (with HRM service), then connects. Times out after 30s if not found.
+ */
+export function startBLEWithDeviceId(
+  deviceId: string,
+  callbacks: { onSuccess: () => void; onError: (error: string) => void }
+): void {
+  if (isRunning) {
+    callbacks.onError('session_already_active');
+    return;
+  }
+  const targetNorm = normalizeAddress(deviceId);
+  if (!targetNorm) {
+    callbacks.onError('invalid_device_id');
+    return;
+  }
+
+  isRunning = true;
+  connectByDeviceIdTargetNormalized = targetNorm;
+  connectByDeviceIdCallbacks = callbacks;
+
+  const fail = (error: string): void => {
+    const cb = connectByDeviceIdCallbacks;
+    cleanupConnectByDeviceId();
+    isRunning = false;
+    if (noble.state === 'poweredOn') {
+      noble.stopScanning();
+    }
+    cb?.onError(error);
+  };
+
+  const succeed = (): void => {
+    cleanupConnectByDeviceId();
+    connectByDeviceIdCallbacks?.onSuccess();
+    connectByDeviceIdCallbacks = null;
+  };
+
+  const startScanForDevice = (): void => {
+    connectByDeviceIdDiscoverHandler = (peripheral: Peripheral) => {
+      const serviceUuids = peripheral.advertisement.serviceUuids || [];
+      const hasHeartRateService = serviceUuids.some(uuid => {
+        const normalizedUuid = uuid.toLowerCase().replace(/-/g, '');
+        return normalizedUuid.includes('180d');
+      });
+      if (!hasHeartRateService) return;
+
+      const addrNorm = normalizeAddress(peripheral.address || peripheral.id || '');
+      if (addrNorm !== connectByDeviceIdTargetNormalized) return;
+      if (peripheral.state !== 'disconnected' || connectedDevice) return;
+
+      noble.stopScanning();
+      if (connectByDeviceIdTimeoutId != null) {
+        clearTimeout(connectByDeviceIdTimeoutId);
+        connectByDeviceIdTimeoutId = null;
+      }
+      if (connectByDeviceIdDiscoverHandler) {
+        noble.removeListener('discover', connectByDeviceIdDiscoverHandler);
+        connectByDeviceIdDiscoverHandler = null;
+      }
+      connectedDevice = peripheral;
+      console.log(`Connecting to device ${peripheral.address}...`);
+      connectToPeripheral(peripheral, {
+        onConnectionFailure: () => fail('connection_failed'),
+        onConnectionSuccess: succeed
+      });
+    };
+
+    noble.on('discover', connectByDeviceIdDiscoverHandler);
+    noble.startScanning([], true);
+    console.log(`Scanning for device ${deviceId} (30s timeout)...`);
+    connectByDeviceIdTimeoutId = setTimeout(() => {
+      if (connectByDeviceIdCallbacks) {
+        fail('device_not_found');
+      }
+    }, CONNECT_BY_ID_TIMEOUT_MS);
+  };
+
+  if (noble.state === 'poweredOn') {
+    startScanForDevice();
+  } else {
+    connectByDeviceIdStateChangeHandler = (state: string) => {
+      if (state === 'poweredOn' && connectByDeviceIdCallbacks) {
+        if (connectByDeviceIdStateChangeHandler) {
+          noble.removeListener('stateChange', connectByDeviceIdStateChangeHandler);
+          connectByDeviceIdStateChangeHandler = null;
+        }
+        startScanForDevice();
+      }
+    };
+    noble.on('stateChange', connectByDeviceIdStateChangeHandler);
+    console.log(`Noble state: ${noble.state}. Will scan when powered on.`);
+  }
+}
+
 /**
  * Get current device ID
  */
@@ -325,4 +494,134 @@ export function getCurrentDeviceId(): string | null {
  */
 export function isBLERunning(): boolean {
   return isRunning;
+}
+
+/**
+ * Derive a display name when advertisement.localName is missing (common on Windows:
+ * name is often in scan response and Windows/noble-winrt may not merge it).
+ * Uses known HRM vendor OUIs so e.g. Polar H10 shows "Polar H10 DD2D5F" instead of "Unknown".
+ */
+function fallbackNameForAddress(address: string): string | null {
+  // Normalize: strip any non-hex so we handle "a0:9e:1a:dd:2d:5f", "a09e1add2d5f", "A0-9E-1A-DD-2D-5F", etc.
+  const normalized = (address || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  if (normalized.length < 12) return null;
+  // Polar Electro OUI A0:9E:1A (first 6 hex chars) - Polar H10 name is typically "Polar H10 XXXXXX" (suffix from MAC)
+  if (normalized.startsWith('a09e1a')) {
+    const lastThreeOctets = normalized.slice(-6); // last 3 bytes = 6 hex chars
+    return `Polar H10 ${lastThreeOctets.toUpperCase()}`;
+  }
+  return null;
+}
+
+/**
+ * Scan-only: discover BLE HRM devices for a duration, report names and device IDs.
+ * Does not connect to any device. Not available when Live BLE stream is active.
+ */
+export function startHRMScan(options: HRMScanOptions): void {
+  if (isRunning) {
+    console.log('HRM scan skipped: BLE stream is active');
+    options.onComplete?.([]);
+    return;
+  }
+  if (hrmScanActive) {
+    console.log('HRM scan already in progress');
+    return;
+  }
+
+  const durationMs = Math.min(Math.max(options.durationMs || 60000, 1000), 60000);
+  const durationSec = Math.round(durationMs / 1000);
+  const seen = new Map<string, HRMScanDevice>(); // dedupe by address
+
+  function finishScan(): void {
+    if (!hrmScanActive) return;
+    hrmScanActive = false;
+    if (hrmScanTimeoutId != null) {
+      clearTimeout(hrmScanTimeoutId);
+      hrmScanTimeoutId = null;
+    }
+    if (noble.state === 'poweredOn') {
+      noble.stopScanning();
+    }
+    if (hrmScanDiscoverHandler) {
+      noble.removeListener('discover', hrmScanDiscoverHandler);
+      hrmScanDiscoverHandler = null;
+    }
+    if (hrmScanStateChangeHandler) {
+      noble.removeListener('stateChange', hrmScanStateChangeHandler);
+      hrmScanStateChangeHandler = null;
+    }
+    const devices = Array.from(seen.values());
+    hrmScanOptions?.onComplete?.(devices);
+    broadcastScanResult({ action: 'scan_complete', devices, duration_sec: durationSec });
+    if (devices.length === 0) {
+      console.log('HRM scan complete: No HRM devices found.');
+    } else {
+      console.log(`HRM scan complete: ${devices.length} device(s) found.`);
+      devices.forEach(d => console.log(`  - ${d.name} (${d.deviceId})`));
+    }
+    hrmScanOptions = null;
+  }
+
+  hrmScanActive = true;
+  hrmScanOptions = options;
+
+  hrmScanDiscoverHandler = (peripheral: Peripheral) => {
+    if (!hrmScanActive) return;
+    const serviceUuids = peripheral.advertisement.serviceUuids || [];
+    const hasHeartRateService = serviceUuids.some(uuid => {
+      const normalizedUuid = uuid.toLowerCase().replace(/-/g, '');
+      return normalizedUuid.includes('180d');
+    });
+    if (!hasHeartRateService) return;
+
+    const rawAddress = (peripheral.address || peripheral.id || '').toLowerCase();
+    // Normalize key to 12-char hex so same device is always keyed the same (address may be "a0:9e:1a:dd:2d:5f" or "a09e1add2d5f")
+    const addressKey = rawAddress.replace(/[^0-9a-f]/g, '');
+    const addressForDisplay = rawAddress.includes(':') ? rawAddress : rawAddress.replace(/(.{2})(?=.)/g, '$1:').toLowerCase();
+    const adv = peripheral.advertisement;
+    const advertisedName = (adv.localName && adv.localName.trim()) || '';
+    const fallbackName = fallbackNameForAddress(rawAddress);
+    const name = advertisedName || fallbackName || 'Unknown';
+
+    const existing = seen.get(addressKey);
+    if (existing) {
+      if (advertisedName && existing.name !== advertisedName) {
+        existing.name = advertisedName;
+        options.onDevice?.(existing);
+        broadcastScanResult({ action: 'scan_device', device: existing });
+      }
+      return;
+    }
+    const device: HRMScanDevice = { name, deviceId: addressForDisplay };
+    seen.set(addressKey, device);
+
+    console.log(`Found HRM: ${name} (${addressForDisplay})`);
+    options.onDevice?.(device);
+    broadcastScanResult({ action: 'scan_device', device });
+  };
+
+  if (noble.state === 'poweredOn') {
+    noble.on('discover', hrmScanDiscoverHandler);
+    noble.startScanning([], true);
+    console.log(`Scanning for HRM devices (${durationSec}s)...`);
+    hrmScanTimeoutId = setTimeout(finishScan, durationMs);
+  } else {
+    hrmScanStateChangeHandler = (state: string) => {
+      if (state === 'poweredOn' && hrmScanActive && hrmScanDiscoverHandler) {
+        noble.on('discover', hrmScanDiscoverHandler);
+        noble.startScanning([], true);
+        console.log(`Scanning for HRM devices (${durationSec}s)...`);
+      }
+    };
+    noble.on('stateChange', hrmScanStateChangeHandler);
+    console.log(`Noble state: ${noble.state}. HRM scan will start when powered on.`);
+    hrmScanTimeoutId = setTimeout(finishScan, durationMs);
+  }
+}
+
+/**
+ * Check if HRM scan (discovery-only) is active
+ */
+export function isHRMScanning(): boolean {
+  return hrmScanActive;
 }

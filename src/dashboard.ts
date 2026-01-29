@@ -16,10 +16,11 @@ import {
   GetStrongerParams,
   FeelBetterParams
 } from './simulator';
-import { startBLE, stopBLE, getCurrentDeviceId } from './ble-controller';
+import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDeviceId, isValidBleDeviceId } from './ble-controller';
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
+import { setScanRequestHandler, setConnectRequestHandler, WS_SERVER_PORT } from './server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -88,6 +89,7 @@ let currentNoiseVariance: number = 2; // Default 2 BPM
 let replayProfile: ReplayProfile = 'profile1'; // Default replay profile
 let replayDataRate: number = 1.0; // Default 1Hz, max 2Hz
 let replayEnableInterpolation: boolean = true; // Default enabled
+let isScanning = false; // HRM discovery scan (no stream active)
 
 // Track profile parameters for each profile
 let profileParameters: {
@@ -101,6 +103,22 @@ let profileParameters: {
   getStronger: { ...defaultProfileParameters.getStronger },
   feelBetter: { ...defaultProfileParameters.feelBetter }
 };
+
+// Build full state object for Socket.io (single source of truth)
+function getFullState() {
+  return {
+    mode: currentMode,
+    isRunning,
+    profile: currentProfile,
+    noiseVariance: currentNoiseVariance,
+    profileParameters: profileParameters,
+    replayProfile: replayProfile,
+    replayDataRate: replayDataRate,
+    replayEnableInterpolation: replayEnableInterpolation,
+    isScanning,
+    wsServerPort: WS_SERVER_PORT
+  };
+}
 
 // Get device ID based on current mode
 function getDeviceId(): string {
@@ -122,12 +140,7 @@ io.on('connection', (socket) => {
   addLog('Dashboard client connected');
   
   // Send current state to new client
-  socket.emit('state', {
-    mode: currentMode,
-    isRunning,
-    profile: currentProfile,
-    noiseVariance: currentNoiseVariance,
-  });
+  socket.emit('state', getFullState());
   
   // Send all existing log messages
   socket.emit('logHistory', logMessages);
@@ -142,7 +155,7 @@ io.on('connection', (socket) => {
     currentMode = mode;
     addLog(`Mode changed from ${oldMode} to ${mode}`);
     addLog(`Device ID will be: ${getDeviceId()}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   // Handle replay profile change
@@ -153,7 +166,7 @@ io.on('connection', (socket) => {
     }
     replayProfile = profile;
     addLog(`Replay profile changed to: ${profile}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   // Handle replay data rate change
@@ -180,7 +193,7 @@ io.on('connection', (socket) => {
       addLog(`Replay data rate changed to: ${rate} Hz`);
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   // Handle skip ahead 1 minute
@@ -207,7 +220,35 @@ io.on('connection', (socket) => {
     
     replayEnableInterpolation = enabled;
     addLog(`Replay interpolation ${enabled ? 'enabled' : 'disabled'}`);
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
+  });
+
+  // Handle HRM scan (discovery only; not allowed when stream active)
+  socket.on('startHRMScan', () => {
+    if (isRunning) {
+      socket.emit('error', 'Cannot scan while a stream is active (Live/Sim/Replay). Stop first.');
+      return;
+    }
+    if (isScanning) {
+      socket.emit('error', 'HRM scan already in progress.');
+      return;
+    }
+    isScanning = true;
+    io.emit('state', getFullState());
+    addLog('Starting HRM scan (60s)...');
+    startHRMScan({
+      durationMs: 60000,
+      onDevice(device) {
+        addLog(`Found HRM: ${device.name} (${device.deviceId})`);
+        io.emit('scanDevice', device);
+      },
+      onComplete(devices) {
+        isScanning = false;
+        io.emit('scanComplete', { devices });
+        addLog(`HRM scan complete: ${devices.length} device(s) found.`);
+        io.emit('state', getFullState());
+      }
+    });
   });
   
   // Handle profile change
@@ -237,7 +278,7 @@ io.on('connection', (socket) => {
         updateSimulationProfile(profile, newDeviceId, profileParams);
         addLog(`Profile changed from ${oldProfile} to ${profile} while running`);
         addLog(`Device ID updated to: ${newDeviceId}`);
-        io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+        io.emit('state', getFullState());
       } catch (error: any) {
         // Revert profile on error
         currentProfile = oldProfile;
@@ -250,7 +291,7 @@ io.on('connection', (socket) => {
       return;
     } else {
       addLog(`Profile changed from ${oldProfile} to ${profile}`);
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+      io.emit('state', getFullState());
     }
   });
   
@@ -287,7 +328,7 @@ io.on('connection', (socket) => {
         addLog(`Profile parameters updated for ${params.profile}`);
       }
       
-      io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+      io.emit('state', getFullState());
     } catch (error: any) {
       socket.emit('error', `Failed to update parameters: ${error.message}`);
     }
@@ -314,7 +355,7 @@ io.on('connection', (socket) => {
       addLog(`Noise variance changed to: ${variance} BPM`);
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   // Handle start/stop
@@ -362,7 +403,7 @@ io.on('connection', (socket) => {
       addLog('BLE scanner started. Searching for HRM devices...');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   socket.on('stop', () => {
@@ -386,11 +427,80 @@ io.on('connection', (socket) => {
       addLog('BLE scanner stopped');
     }
     
-    io.emit('state', { mode: currentMode, isRunning, profile: currentProfile, noiseVariance: currentNoiseVariance, profileParameters: profileParameters, replayProfile: replayProfile, replayDataRate: replayDataRate, replayEnableInterpolation: replayEnableInterpolation });
+    io.emit('state', getFullState());
   });
   
   socket.on('disconnect', () => {
     addLog('Dashboard client disconnected');
+  });
+});
+
+// Allow remote WS client (port 8080) to trigger HRM scan by sending text "scan"
+setScanRequestHandler((reply) => {
+  if (isRunning) {
+    reply({ action: 'scan_rejected', error: 'Cannot scan while a stream is active (Live/Sim/Replay). Stop first.' });
+    return;
+  }
+  if (isScanning) {
+    reply({ action: 'scan_rejected', error: 'HRM scan already in progress.' });
+    return;
+  }
+  isScanning = true;
+  io.emit('state', getFullState());
+  addLog('Starting HRM scan (60s)...');
+  reply({ action: 'scan_started' });
+  startHRMScan({
+    durationMs: 60000,
+    onDevice(device) {
+      addLog(`Found HRM: ${device.name} (${device.deviceId})`);
+      io.emit('scanDevice', device);
+    },
+    onComplete(devices) {
+      isScanning = false;
+      io.emit('scanComplete', { devices });
+      addLog(`HRM scan complete: ${devices.length} device(s) found.`);
+      io.emit('state', getFullState());
+    }
+  });
+});
+
+// Allow remote WS client to start live session by sending "connect:<deviceId>" (e.g. connect:A0:9E:1A:DD:2D:5F)
+setConnectRequestHandler((deviceId, reply) => {
+  if (isRunning) {
+    reply({ action: 'connect_rejected', error: 'session_already_active', message: 'A stream is already active. Stop first.' });
+    return;
+  }
+  if (isScanning) {
+    reply({ action: 'connect_rejected', error: 'scan_in_progress', message: 'HRM scan in progress. Wait for it to finish.' });
+    return;
+  }
+  if (!isValidBleDeviceId(deviceId)) {
+    reply({ action: 'connect_rejected', error: 'invalid_device_id', message: 'Invalid device ID; expected BLE address (e.g. A0:9E:1A:DD:2D:5F).' });
+    return;
+  }
+  currentMode = 'Live';
+  isRunning = true;
+  io.emit('state', getFullState());
+  addLog(`Starting live session for device ${deviceId}...`);
+  startBLEWithDeviceId(deviceId, {
+    onSuccess() {
+      reply({ action: 'connect_started', deviceId });
+      io.emit('state', getFullState());
+      addLog(`Live session started for ${deviceId}`);
+    },
+    onError(err) {
+      isRunning = false;
+      io.emit('state', getFullState());
+      const messages: Record<string, string> = {
+        session_already_active: 'A stream is already active.',
+        scan_in_progress: 'HRM scan in progress.',
+        invalid_device_id: 'Invalid device ID format.',
+        device_not_found: 'Device not found within 30s.',
+        connection_failed: 'Connection or subscribe failed.'
+      };
+      reply({ action: 'connect_failed', error: err, message: messages[err] || err });
+      addLog(`Connect failed for ${deviceId}: ${err}`);
+    }
   });
 });
 
