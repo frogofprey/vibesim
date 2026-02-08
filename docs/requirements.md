@@ -32,20 +32,22 @@
 - **FR-18** Support configurable replay data rate (0.1–2.0 Hz) and optional interpolation so replay can run at a different rate than the source data.
 - **FR-19** Support “skip ahead” by one minute in replay time while replay is running.
 - **FR-20** Apply configurable noise variance to replayed HR; support toggling interpolation on/off (when not running).
+- **FR-21** Emit each replay point at the wall-clock time that corresponds to its replay time (1:1 real-time alignment; no time warp), so downstream “state at time T” is valid.
+- **FR-22** Ensure no two consecutive replay points (interpolated or original) are closer than 400 ms (2.5 Hz max effective rate).
 
 ### Dashboard (UI and Control)
-- **FR-21** Provide a web UI (HTTP on port 3000) with mode toggle: Live (BLE), Sim, Replay.
-- **FR-22** Show WebSocket server URL and port; allow Start/Stop for the active stream (Live, Sim, or Replay).
-- **FR-23** For Sim: profile dropdown, noise variance, and (when applicable) profile parameters; for Replay: profile, data rate, interpolation toggle, skip-ahead control.
-- **FR-24** Provide “Scan for HRM” to start a 60 s discovery scan; show results in the UI and send them to the WebSocket client.
-- **FR-25** Keep dashboard state in sync with the server (mode, isRunning, isScanning, profile, replay/data rate, etc.) via Socket.io (e.g. `state`, `setMode`, `start`, `stop`, `scanComplete`, `scanDevice`, etc.).
-- **FR-26** Show a real-time, scrollable system log (console + app messages); support copying log to clipboard; optional filter (e.g. hide interpolated messages).
+- **FR-23** Provide a web UI (HTTP on port 3000) with mode toggle: Live (BLE), Sim, Replay.
+- **FR-24** Show WebSocket server URL and port; allow Start/Stop for the active stream (Live, Sim, or Replay).
+- **FR-25** For Sim: profile dropdown, noise variance, and (when applicable) profile parameters; for Replay: profile, data rate, interpolation toggle, skip-ahead control.
+- **FR-26** Provide “Scan for HRM” to start a 60 s discovery scan; show results in the UI and send them to the WebSocket client.
+- **FR-27** Keep dashboard state in sync with the server (mode, isRunning, isScanning, profile, replay/data rate, etc.) via Socket.io (e.g. `state`, `setMode`, `start`, `stop`, `scanComplete`, `scanDevice`, etc.).
+- **FR-28** Show a real-time, scrollable system log (console + app messages); support copying log to clipboard; optional filter (e.g. hide interpolated messages).
 
 ### Application Lifecycle
-- **FR-27** Start both WebSocket server and dashboard from one entry point (`npm start` / `main`).
-- **FR-28** Support graceful shutdown: stop any active stream (BLE/Sim/Replay), close Socket.io, close HTTP server, close WebSocket server, then exit with code 0.
-- **FR-29** Support shutdown via keyboard: “q” + Enter in the terminal (when stdin is a TTY) to trigger the same graceful shutdown without relying on Ctrl+C.
-- **FR-30** If shutdown does not complete within a set time (e.g. 4 s), exit anyway (timeout fallback); ensure shutdown runs only once (guard against repeated “q” or Ctrl+C).
+- **FR-29** Start both WebSocket server and dashboard from one entry point (`npm start` / `main`).
+- **FR-30** Support graceful shutdown: stop any active stream (BLE/Sim/Replay), close Socket.io, close HTTP server, close WebSocket server, then exit with code 0.
+- **FR-31** Support shutdown via keyboard: “q” + Enter in the terminal (when stdin is a TTY) to trigger the same graceful shutdown without relying on Ctrl+C.
+- **FR-32** If shutdown does not complete within a set time (e.g. 4 s), exit anyway (timeout fallback); ensure shutdown runs only once (guard against repeated “q” or Ctrl+C).
 
 ---
 
