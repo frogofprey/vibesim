@@ -20,7 +20,7 @@ import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDevice
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
-import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, closeWebSocketServer, WS_SERVER_PORT } from './server';
+import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, setDisconnectHandler, closeWebSocketServer, WS_SERVER_PORT } from './server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -504,14 +504,14 @@ setConnectRequestHandler((deviceId, reply) => {
   });
 });
 
-// Allow remote WS client to stop scan or stream by sending text "stop"
-setStopRequestHandler((reply) => {
+// Shared stop logic: stop active scan or stream; optionally reply to WS client
+function performStop(options: { reason: string; reply?: (payload: object) => void }): void {
   if (isScanning) {
     stopHRMScan();
     isScanning = false;
     io.emit('state', getFullState());
-    addLog('HRM scan stopped by remote client.');
-    reply({ action: 'stopped', what: 'scan' });
+    addLog(`HRM scan stopped ${options.reason}`);
+    options.reply?.({ action: 'stopped', what: 'scan' });
     return;
   }
   if (isRunning) {
@@ -525,11 +525,21 @@ setStopRequestHandler((reply) => {
       stopBLE();
     }
     io.emit('state', getFullState());
-    addLog(`Stream stopped by remote client (${mode}).`);
-    reply({ action: 'stopped', what: 'stream', mode });
+    addLog(`Stream stopped ${options.reason} (${mode}).`);
+    options.reply?.({ action: 'stopped', what: 'stream', mode });
     return;
   }
-  reply({ action: 'stop_rejected', error: 'nothing_to_stop', message: 'No scan or stream active.' });
+  options.reply?.({ action: 'stop_rejected', error: 'nothing_to_stop', message: 'No scan or stream active.' });
+}
+
+// Allow remote WS client to stop scan or stream by sending text "stop"
+setStopRequestHandler((reply) => {
+  performStop({ reason: 'by remote client.', reply });
+});
+
+// On WS client disconnect, stop any active scan or stream (same behavior as "stop" command)
+setDisconnectHandler(() => {
+  performStop({ reason: '(client disconnected).' });
 });
 
 // Start HTTP server

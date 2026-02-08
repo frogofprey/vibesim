@@ -46,6 +46,13 @@ export function setStopRequestHandler(fn: ((reply: (payload: object) => void) =>
   stopRequestHandler = fn;
 }
 
+// Handler for WS client disconnect; set by dashboard (stops active scan/stream)
+let disconnectHandler: (() => void) | null = null;
+
+export function setDisconnectHandler(fn: (() => void) | null): void {
+  disconnectHandler = fn;
+}
+
 // Create WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 
@@ -67,10 +74,11 @@ wss.on('connection', (ws: WebSocket) => {
 
   // Handle client disconnect
   ws.on('close', () => {
-    console.log('Client disconnected');
     if (connectedClient === ws) {
+      disconnectHandler?.();
       connectedClient = null;
     }
+    console.log('Client disconnected');
   });
 
   // Handle errors
