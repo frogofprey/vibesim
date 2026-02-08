@@ -89,8 +89,9 @@ function loadReplayData(profile: ReplayProfile): ReplayDataPoint[] {
 }
 
 /**
- * Interpolate data points to target data rate
- * Ensures no gaps exceed 0.4 seconds (2.5Hz max effective rate)
+ * Interpolate data points to target data rate.
+ * User-selected rate is primary (spacing = 1/dataRate). Minimum 400ms between points
+ * is enforced as a fallback to avoid overloading the interface.
  */
 function interpolateDataPoints(
   data: ReplayDataPoint[], 
@@ -115,9 +116,9 @@ function interpolateDataPoints(
     return interpolated;
   }
   
-  // Interpolation enabled - proceed with normal interpolation logic
+  // Interpolation enabled - user rate primary, 400ms minimum as fallback
   const targetInterval = 1.0 / dataRate; // seconds
-  const maxInterval = 0.4; // seconds (2.5Hz)
+  const minIntervalSeconds = 0.4; // minimum 400ms between any two points (safety cap)
   
   for (let i = 0; i < data.length; i++) {
     const currentPoint = data[i];
@@ -138,24 +139,24 @@ function interpolateDataPoints(
         // Only interpolate if gap is larger than target interval
         // If CSV data is already at or denser than target rate, no interpolation needed
         if (gap > targetInterval) {
-          // Determine actual interval to use
-          // Use targetInterval, but ensure no gap exceeds maxInterval (0.4s)
-          const actualInterval = Math.min(targetInterval, maxInterval);
+          // User rate is primary; 400ms floor avoids overloading the interface
+          const actualInterval = Math.max(targetInterval, minIntervalSeconds);
           
-          // Generate interpolated points
+          // Generate interpolated points; only add if at least 400ms before next original
           let t = currentPoint.time + actualInterval;
           while (t < nextPoint.time) {
-            // Linear interpolation
-            const ratio = (t - currentPoint.time) / gap;
-            const interpolatedHR = currentPoint.heartRate + 
-              (nextPoint.heartRate - currentPoint.heartRate) * ratio;
-            
-            interpolated.push({
-              time: t,
-              heartRate: interpolatedHR,
-              isOriginal: false
-            });
-            
+            if (nextPoint.time - t >= minIntervalSeconds) {
+              // Linear interpolation
+              const ratio = (t - currentPoint.time) / gap;
+              const interpolatedHR = currentPoint.heartRate + 
+                (nextPoint.heartRate - currentPoint.heartRate) * ratio;
+              
+              interpolated.push({
+                time: t,
+                heartRate: interpolatedHR,
+                isOriginal: false
+              });
+            }
             t += actualInterval;
           }
         }
@@ -184,8 +185,8 @@ function scheduleNextHR(): void {
     // Loop back to start
     replayState.currentIndex = 0;
     replayState.lastHeartRate = null; // Reset filter
+    replayState.startTime = Date.now(); // Next cycle 1:1 with wall time from now
     console.log(`Replay looped back to start for ${profile}`);
-    // Continue with first data point
     scheduleNextHR();
     return;
   }
@@ -226,40 +227,31 @@ function scheduleNextHR(): void {
   // Broadcast HR data
   broadcastHeartRate(deviceId, heartRate, 'hr');
   
-  // Calculate delay based on interpolation setting
-  let delay: number;
-  if (replayState.enableInterpolation) {
-    // Interpolation enabled: use constant interval based on data rate
-    const targetInterval = 1.0 / replayState.dataRate; // seconds
-    delay = targetInterval * 1000; // Convert to milliseconds
-  } else {
-    // Interpolation disabled: use original CSV time differences
-    if (currentIndex < interpolatedData.length - 1) {
-      const nextPoint = interpolatedData[currentIndex + 1];
-      delay = (nextPoint.time - currentPoint.time) * 1000; // Convert to milliseconds
-    } else {
-      // Last point - use interval from previous point or default to 1 second
-      if (interpolatedData.length > 1) {
-        const prevPoint = interpolatedData[interpolatedData.length - 2];
-        delay = (currentPoint.time - prevPoint.time) * 1000;
-      } else {
-        delay = 1000; // Default 1 second
-      }
-    }
-  }
-  
-  // Ensure minimum delay of 10ms to prevent too rapid updates
-  const minDelay = Math.max(10, delay);
-  
   // Increment index for next iteration
   replayState.currentIndex++;
   
-  // Schedule next update
+  // Loop back to start if we've reached the end
+  if (replayState.currentIndex >= interpolatedData.length) {
+    replayState.currentIndex = 0;
+    replayState.lastHeartRate = null; // Reset filter
+    replayState.startTime = Date.now(); // Next cycle 1:1 with wall time from now
+    console.log(`Replay looped back to start for ${profile}`);
+    scheduleNextHR();
+    return;
+  }
+  
+  // Time-based scheduling: emit next point at wall time that matches its replay time
+  const nextPoint = interpolatedData[replayState.currentIndex];
+  const T0 = interpolatedData[0].time;
+  const T_next = nextPoint.time;
+  let delayMs = (replayState.startTime + (T_next - T0) * 1000) - Date.now();
+  delayMs = Math.max(10, delayMs); // min 10ms to avoid tight loops if slightly behind
+  
   const timeoutId = setTimeout(() => {
     if (replayState && replayState.isRunning) {
       scheduleNextHR();
     }
-  }, minDelay);
+  }, delayMs);
   
   replayState.timeoutIds.push(timeoutId);
 }
