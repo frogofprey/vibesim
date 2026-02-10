@@ -64,6 +64,38 @@ export function getFaultStall(): boolean {
   return faultStallEnabled;
 }
 
+// Fault injection: freeze HR at current value (static output)
+let faultFreezeEnabled = false;
+let faultFrozenHeartRate: number | null = null;
+
+export function setFaultFreeze(enabled: boolean): void {
+  faultFreezeEnabled = enabled;
+  if (!enabled) {
+    faultFrozenHeartRate = null;
+  }
+}
+
+export function getFaultFreeze(): boolean {
+  return faultFreezeEnabled;
+}
+
+// Fault injection: one-shot spike (high or low) for a duration
+const SPIKE_HIGH_BPM = 200;
+const SPIKE_LOW_BPM = 50;
+const SPIKE_WIDTH_MIN = 0.1;
+const SPIKE_WIDTH_MAX = 60;
+
+let faultSpikeStartTime: number | null = null;
+let faultSpikeWidthSeconds = 0;
+let faultSpikeDirection: 'high' | 'low' = 'high';
+
+export function triggerFaultSpike(direction: 'high' | 'low', widthSeconds: number): void {
+  const w = Math.max(SPIKE_WIDTH_MIN, Math.min(SPIKE_WIDTH_MAX, widthSeconds));
+  faultSpikeStartTime = Date.now();
+  faultSpikeWidthSeconds = w;
+  faultSpikeDirection = direction;
+}
+
 // Create WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 
@@ -157,10 +189,30 @@ export function broadcastHeartRate(deviceId: string, heartRate: number, action: 
     return;
   }
 
+  let valueToSend = heartRate;
+  if (action === 'hr') {
+    // Spike: one-shot override (takes precedence over freeze)
+    if (faultSpikeStartTime !== null) {
+      const elapsed = (Date.now() - faultSpikeStartTime) / 1000;
+      if (elapsed < faultSpikeWidthSeconds) {
+        valueToSend = faultSpikeDirection === 'high' ? SPIKE_HIGH_BPM : SPIKE_LOW_BPM;
+      } else {
+        faultSpikeStartTime = null;
+      }
+    }
+    // Freeze: hold first HR after enable as static value
+    if (faultSpikeStartTime === null && faultFreezeEnabled) {
+      if (faultFrozenHeartRate === null) {
+        faultFrozenHeartRate = valueToSend;
+      }
+      valueToSend = faultFrozenHeartRate;
+    }
+  }
+
   const message = {
     device_id: deviceId,
     date: new Date().toISOString(),
-    hr: heartRate.toString(),
+    hr: valueToSend.toString(),
     action: action
   };
 

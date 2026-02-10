@@ -401,6 +401,22 @@
                     <input type="checkbox" id="faultStallCheckbox" style="cursor: pointer; width: 18px; height: 18px;">
                     <span style="font-size: 14px;">Stall (no data emitted)</span>
                 </label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; background: white; margin-top: 8px;">
+                    <input type="checkbox" id="faultFreezeCheckbox" style="cursor: pointer; width: 18px; height: 18px;">
+                    <span style="font-size: 14px;">Freeze HR (static value)</span>
+                </label>
+                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; background: white;">
+                    <span style="font-size: 14px;">Spike:</span>
+                    <select id="faultSpikeDirection" style="padding: 6px 8px; border-radius: 4px; font-size: 14px;">
+                        <option value="high">High</option>
+                        <option value="low">Low</option>
+                    </select>
+                    <label style="display: flex; align-items: center; gap: 4px; font-size: 14px;">
+                        <span>Width (s)</span>
+                        <input type="number" id="faultSpikeWidth" min="0.1" max="60" step="0.1" value="2" style="width: 60px; padding: 6px; border-radius: 4px; font-size: 14px;">
+                    </label>
+                    <button type="button" id="faultSpikeTriggerBtn" class="start-stop-btn" style="padding: 6px 12px; font-size: 14px;">Trigger spike</button>
+                </div>
             </div>
         </div>
         
@@ -550,6 +566,7 @@
         let replayDataRate = 1.0;
         let replayEnableInterpolation = true;
         let faultStallEnabled = false;
+        let faultFreezeEnabled = false;
         let showInterpolatedLogs = true;
         let lastScanDevices = [];
         let profileParameters = {
@@ -578,6 +595,10 @@
         const startStopBtn = document.getElementById('startStopBtn');
         const scanHRMBtn = document.getElementById('scanHRMBtn');
         const faultStallCheckbox = document.getElementById('faultStallCheckbox');
+        const faultFreezeCheckbox = document.getElementById('faultFreezeCheckbox');
+        const faultSpikeDirection = document.getElementById('faultSpikeDirection');
+        const faultSpikeWidth = document.getElementById('faultSpikeWidth');
+        const faultSpikeTriggerBtn = document.getElementById('faultSpikeTriggerBtn');
         const scanResultsGroup = document.getElementById('scanResultsGroup');
         const scanResultsList = document.getElementById('scanResultsList');
         const wsUrlDisplay = document.getElementById('wsUrlDisplay');
@@ -629,6 +650,9 @@
             }
             if (state.faultStallEnabled !== undefined) {
                 faultStallEnabled = state.faultStallEnabled;
+            }
+            if (state.faultFreezeEnabled !== undefined) {
+                faultFreezeEnabled = state.faultFreezeEnabled;
             }
             
             updateUI();
@@ -738,6 +762,21 @@
             faultStallCheckbox.addEventListener('change', (e) => {
                 const enabled = !!e.target.checked;
                 socket.emit('setFaultStall', enabled);
+            });
+        }
+        if (faultFreezeCheckbox) {
+            faultFreezeCheckbox.addEventListener('change', (e) => {
+                const enabled = !!e.target.checked;
+                socket.emit('setFaultFreeze', enabled);
+            });
+        }
+        if (faultSpikeTriggerBtn && faultSpikeDirection && faultSpikeWidth) {
+            faultSpikeTriggerBtn.addEventListener('click', () => {
+                const direction = faultSpikeDirection.value === 'low' ? 'low' : 'high';
+                let widthSeconds = parseFloat(faultSpikeWidth.value);
+                if (isNaN(widthSeconds) || widthSeconds < 0.1) widthSeconds = 0.1;
+                if (widthSeconds > 60) widthSeconds = 60;
+                socket.emit('triggerFaultSpike', { direction, widthSeconds });
             });
         }
         
@@ -937,6 +976,7 @@
             
             // Update fault stall checkbox
             if (faultStallCheckbox) faultStallCheckbox.checked = faultStallEnabled;
+            if (faultFreezeCheckbox) faultFreezeCheckbox.checked = faultFreezeEnabled;
             
             // Update profile select
             profileSelect.value = currentProfile;

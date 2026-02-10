@@ -20,7 +20,7 @@ import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDevice
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
-import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, setDisconnectHandler, setFaultStall, closeWebSocketServer, WS_SERVER_PORT } from './server';
+import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, setDisconnectHandler, setFaultStall, setFaultFreeze, triggerFaultSpike, closeWebSocketServer, WS_SERVER_PORT } from './server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -91,6 +91,7 @@ let replayDataRate: number = 1.0; // Default 1Hz, max 2Hz
 let replayEnableInterpolation: boolean = true; // Default enabled
 let isScanning = false; // HRM discovery scan (no stream active)
 let faultStallEnabled: boolean = false; // Fault injection: stall HR emission (default off)
+let faultFreezeEnabled: boolean = false; // Fault injection: freeze HR at static value (default off)
 
 // Track profile parameters for each profile
 let profileParameters: {
@@ -120,6 +121,7 @@ function getFullState() {
     replayEnableInterpolation: replayEnableInterpolation,
     isScanning,
     faultStallEnabled,
+    faultFreezeEnabled,
     wsServerPort: WS_SERVER_PORT
   };
 }
@@ -375,7 +377,23 @@ io.on('connection', (socket) => {
     addLog(faultStallEnabled ? 'Fault injection: Stall ON (no data emitted)' : 'Fault injection: Stall OFF (data sent normally)');
     io.emit('state', getFullState());
   });
-  
+
+  socket.on('setFaultFreeze', (enabled: boolean) => {
+    faultFreezeEnabled = typeof enabled === 'boolean' ? enabled : false;
+    setFaultFreeze(faultFreezeEnabled);
+    addLog(faultFreezeEnabled ? 'Fault injection: Freeze HR ON (static value)' : 'Fault injection: Freeze HR OFF');
+    io.emit('state', getFullState());
+  });
+
+  socket.on('triggerFaultSpike', (payload: { direction: 'high' | 'low'; widthSeconds: number }) => {
+    const direction = payload?.direction === 'low' ? 'low' : 'high';
+    let widthSeconds = typeof payload?.widthSeconds === 'number' ? payload.widthSeconds : 2;
+    widthSeconds = Math.max(0.1, Math.min(60, widthSeconds));
+    triggerFaultSpike(direction, widthSeconds);
+    addLog(`Fault injection: Spike triggered ${direction} for ${widthSeconds}s`);
+    io.emit('state', getFullState());
+  });
+
   // Handle start/stop
   socket.on('start', () => {
     if (isRunning) {
