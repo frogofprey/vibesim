@@ -22,23 +22,23 @@
 - **FR-12** Send scan results as JSON (`scan_device`, `scan_complete` with devices list and duration).
 
 ### Simulator
-- **FR-13** Provide four fitness profiles with time-based HR curves: `getFitter` (HIIT), `loseWeight` (Zone 2), `getStronger` (bursts), `feelBetter` (low intensity).
+- **FR-13** Provide five fitness profiles with time-based HR curves: `getFitter` (HIIT), `loseWeight` (Zone 2), `getStronger` (bursts), `feelBetter` (low intensity), `warmupRecovery` (Warmup/Recovery; same curve as feelBetter, defaults baseHR 80, amplitude 3, period 45 s).
 - **FR-14** Add configurable Gaussian noise (default 2 BPM variance) to simulated HR; apply the same low-pass filter as Live.
 - **FR-15** Allow configurable profile parameters (cycle lengths, HR bounds, etc.) and support changing profile and parameters while Sim is running.
 - **FR-16** Emit simulated HR in the same JSON format as the WebSocket server; support start/stop and variance updates while running.
 
 ### Replay
-- **FR-17** Replay HR from CSV files (e.g. `profile1.csv`, `profile2.csv`, `profile3.csv`) with columns time and heart rate.
-- **FR-18** Support configurable replay data rate (0.1–2.0 Hz) and optional interpolation so replay can run at a different rate than the source data.
+- **FR-17** Replay HR from CSV files (`profile1.csv`, `profile2.csv`, `profile3.csv`, `profile4.csv` / State Test) with columns time and heart rate.
+- **FR-18** Support configurable replay data rate (0.1–2.0 Hz) and optional interpolation; user-selected rate is primary (interpolation spacing = 1/dataRate), with 400 ms minimum between points as a fallback to avoid overloading the interface.
 - **FR-19** Support “skip ahead” by one minute in replay time while replay is running.
 - **FR-20** Apply configurable noise variance to replayed HR; support toggling interpolation on/off (when not running).
 - **FR-21** Emit each replay point at the wall-clock time that corresponds to its replay time (1:1 real-time alignment; no time warp), so downstream “state at time T” is valid.
-- **FR-22** Ensure no two consecutive replay points (interpolated or original) are closer than 400 ms (2.5 Hz max effective rate).
+- **FR-22** Enforce minimum 400 ms between consecutive replay points (2.5 Hz cap) as a safety fallback; primary spacing is driven by the selected data rate.
 
 ### Dashboard (UI and Control)
 - **FR-23** Provide a web UI (HTTP on port 3000) with mode toggle: Live (BLE), Sim, Replay.
 - **FR-24** Show WebSocket server URL and port; allow Start/Stop for the active stream (Live, Sim, or Replay).
-- **FR-25** For Sim: profile dropdown, noise variance, and (when applicable) profile parameters; for Replay: profile, data rate, interpolation toggle, skip-ahead control.
+- **FR-25** For Sim: profile dropdown, noise variance, and (when applicable) profile parameters; for Replay: profile, data rate, interpolation toggle, skip-ahead control. Fault injection: Stall (no data emitted), Freeze HR (static value), and Spike (direction high/low, width in seconds, trigger button); all default off or one-shot.
 - **FR-26** Provide “Scan for HRM” to start a 60 s discovery scan; show results in the UI and send them to the WebSocket client.
 - **FR-27** Keep dashboard state in sync with the server (mode, isRunning, isScanning, profile, replay/data rate, etc.) via Socket.io (e.g. `state`, `setMode`, `start`, `stop`, `scanComplete`, `scanDevice`, etc.).
 - **FR-28** Show a real-time, scrollable system log (console + app messages); support copying log to clipboard; optional filter (e.g. hide interpolated messages).
@@ -48,6 +48,11 @@
 - **FR-30** Support graceful shutdown: stop any active stream (BLE/Sim/Replay), close Socket.io, close HTTP server, close WebSocket server, then exit with code 0.
 - **FR-31** Support shutdown via keyboard: “q” + Enter in the terminal (when stdin is a TTY) to trigger the same graceful shutdown without relying on Ctrl+C.
 - **FR-32** If shutdown does not complete within a set time (e.g. 4 s), exit anyway (timeout fallback); ensure shutdown runs only once (guard against repeated “q” or Ctrl+C).
+
+---
+
+### Fault Injection
+- **FR-33** Support fault injection at the WebSocket broadcast layer (all sources: Live, Sim, Replay). **Stall**: toggle (default off); when on, no HR or disconnect messages are sent. **Freeze HR**: toggle (default off); when on, the first HR after enable is held and sent for every subsequent HR broadcast until disabled; disconnect events unchanged. **Spike**: one-shot impulse with direction (high = 200 BPM, low = 50 BPM) and width in seconds (0.1–60); for that duration override HR to the spiked value, then resume normal; only HR is overridden, not disconnect. Order of application: stall (no send), then spike (if in window), then freeze, then actual value.
 
 ---
 
