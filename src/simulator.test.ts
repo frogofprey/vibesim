@@ -199,11 +199,12 @@ describe('Heart Rate Simulator', () => {
     });
 
     it('should verify noise is within 2 BPM of base curve for all profiles', () => {
-      const profiles: Array<'getFitter' | 'loseWeight' | 'getStronger' | 'feelBetter'> = [
+      const profiles: Array<'getFitter' | 'loseWeight' | 'getStronger' | 'feelBetter' | 'warmupRecovery'> = [
         'getFitter',
         'loseWeight',
         'getStronger',
-        'feelBetter'
+        'feelBetter',
+        'warmupRecovery'
       ];
       const variance = 2;
       const samples = 500;
@@ -227,6 +228,9 @@ describe('Heart Rate Simulator', () => {
               break;
             case 'feelBetter':
               profileParams = { profile: 'feelBetter', params: defaultProfileParameters.feelBetter };
+              break;
+            case 'warmupRecovery':
+              profileParams = { profile: 'warmupRecovery', params: defaultProfileParameters.warmupRecovery };
               break;
           }
           const baseHR = getBaseHeartRate(profileParams, elapsedSeconds);

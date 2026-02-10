@@ -349,6 +349,7 @@
                     <option value="getFitter">Get Fitter (HIIT)</option>
                     <option value="getStronger">Get Stronger (Bursts)</option>
                     <option value="feelBetter">Feel Better (Low Intensity)</option>
+                    <option value="warmupRecovery">Warmup/Recovery</option>
                 </select>
             </div>
             
@@ -392,6 +393,14 @@
             <div class="control-group">
                 <label>Scan</label>
                 <button id="scanHRMBtn" class="start-stop-btn" style="background: #2196f3; color: white; width: 100%;">Scan for HRM</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Fault injection</label>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px; border: 2px solid #e0e0e0; border-radius: 6px; background: white;">
+                    <input type="checkbox" id="faultStallCheckbox" style="cursor: pointer; width: 18px; height: 18px;">
+                    <span style="font-size: 14px;">Stall (no data emitted)</span>
+                </label>
             </div>
         </div>
         
@@ -489,6 +498,25 @@
                     </div>
                 </div>
             </div>
+            
+            <!-- WarmupRecovery Parameters -->
+            <div class="params-group" id="paramsWarmupRecovery" style="display: none;">
+                <h3 style="color: #555; margin-bottom: 10px;">Warmup/Recovery Parameters</h3>
+                <div class="params-grid">
+                    <div class="param-item">
+                        <label>Base HR (BPM)</label>
+                        <input type="number" id="paramWarmupRecoveryBaseHR" min="50" max="200" step="1" value="80" class="param-input">
+                    </div>
+                    <div class="param-item">
+                        <label>Variation Amplitude (BPM)</label>
+                        <input type="number" id="paramWarmupRecoveryVariationAmp" min="0" max="50" step="0.1" value="3" class="param-input">
+                    </div>
+                    <div class="param-item">
+                        <label>Variation Period (s)</label>
+                        <input type="number" id="paramWarmupRecoveryVariationPeriod" min="1" max="300" step="1" value="45" class="param-input">
+                    </div>
+                </div>
+            </div>
         </div>
         
         <div class="log-section">
@@ -521,13 +549,15 @@
         let replayProfile = 'profile1';
         let replayDataRate = 1.0;
         let replayEnableInterpolation = true;
+        let faultStallEnabled = false;
         let showInterpolatedLogs = true;
         let lastScanDevices = [];
         let profileParameters = {
             getFitter: { cycleLength: 60, highIntensityDuration: 20, lowHR: 120, highHR: 180 },
             loseWeight: { baseHR: 135, variationAmplitude: 5, variationPeriod: 30 },
             getStronger: { cycleLength: 90, burstDuration: 15, baselineHR: 110, peakHR: 170 },
-            feelBetter: { baseHR: 100, variationAmplitude: 10, variationPeriod: 45 }
+            feelBetter: { baseHR: 100, variationAmplitude: 10, variationPeriod: 45 },
+            warmupRecovery: { baseHR: 80, variationAmplitude: 3, variationPeriod: 45 }
         };
         let paramsSectionExpanded = false;
         
@@ -547,6 +577,7 @@
         const noiseInput = document.getElementById('noiseInput');
         const startStopBtn = document.getElementById('startStopBtn');
         const scanHRMBtn = document.getElementById('scanHRMBtn');
+        const faultStallCheckbox = document.getElementById('faultStallCheckbox');
         const scanResultsGroup = document.getElementById('scanResultsGroup');
         const scanResultsList = document.getElementById('scanResultsList');
         const wsUrlDisplay = document.getElementById('wsUrlDisplay');
@@ -595,6 +626,9 @@
             }
             if (state.replayEnableInterpolation !== undefined) {
                 replayEnableInterpolation = state.replayEnableInterpolation;
+            }
+            if (state.faultStallEnabled !== undefined) {
+                faultStallEnabled = state.faultStallEnabled;
             }
             
             updateUI();
@@ -700,6 +734,13 @@
             }
         });
         
+        if (faultStallCheckbox) {
+            faultStallCheckbox.addEventListener('change', (e) => {
+                const enabled = !!e.target.checked;
+                socket.emit('setFaultStall', enabled);
+            });
+        }
+        
         profileSelect.addEventListener('change', (e) => {
             // Allow profile changes while running in Sim mode
             if (isRunning && currentMode === 'Sim') {
@@ -738,6 +779,11 @@
                 baseHR: document.getElementById('paramFeelBetterBaseHR'),
                 variationAmplitude: document.getElementById('paramFeelBetterVariationAmp'),
                 variationPeriod: document.getElementById('paramFeelBetterVariationPeriod')
+            },
+            warmupRecovery: {
+                baseHR: document.getElementById('paramWarmupRecoveryBaseHR'),
+                variationAmplitude: document.getElementById('paramWarmupRecoveryVariationAmp'),
+                variationPeriod: document.getElementById('paramWarmupRecoveryVariationPeriod')
             }
         };
         
@@ -889,6 +935,9 @@
             // Update interpolation checkbox
             replayInterpolationCheckbox.checked = replayEnableInterpolation;
             
+            // Update fault stall checkbox
+            if (faultStallCheckbox) faultStallCheckbox.checked = faultStallEnabled;
+            
             // Update profile select
             profileSelect.value = currentProfile;
             
@@ -966,13 +1015,15 @@
             document.getElementById('paramsLoseWeight').style.display = 'none';
             document.getElementById('paramsGetStronger').style.display = 'none';
             document.getElementById('paramsFeelBetter').style.display = 'none';
+            document.getElementById('paramsWarmupRecovery').style.display = 'none';
             
             // Show the current profile's parameters
             const profileMap = {
                 'getFitter': 'paramsGetFitter',
                 'loseWeight': 'paramsLoseWeight',
                 'getStronger': 'paramsGetStronger',
-                'feelBetter': 'paramsFeelBetter'
+                'feelBetter': 'paramsFeelBetter',
+                'warmupRecovery': 'paramsWarmupRecovery'
             };
             
             const activeGroup = document.getElementById(profileMap[currentProfile]);
@@ -1003,6 +1054,11 @@
             if (paramInputs.feelBetter.baseHR) paramInputs.feelBetter.baseHR.value = profileParameters.feelBetter.baseHR;
             if (paramInputs.feelBetter.variationAmplitude) paramInputs.feelBetter.variationAmplitude.value = profileParameters.feelBetter.variationAmplitude;
             if (paramInputs.feelBetter.variationPeriod) paramInputs.feelBetter.variationPeriod.value = profileParameters.feelBetter.variationPeriod;
+            
+            // Update WarmupRecovery inputs
+            if (paramInputs.warmupRecovery.baseHR) paramInputs.warmupRecovery.baseHR.value = profileParameters.warmupRecovery.baseHR;
+            if (paramInputs.warmupRecovery.variationAmplitude) paramInputs.warmupRecovery.variationAmplitude.value = profileParameters.warmupRecovery.variationAmplitude;
+            if (paramInputs.warmupRecovery.variationPeriod) paramInputs.warmupRecovery.variationPeriod.value = profileParameters.warmupRecovery.variationPeriod;
         }
         
         function updateProfileParameter(profile, param, value) {

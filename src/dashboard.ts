@@ -20,7 +20,7 @@ import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDevice
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
-import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, setDisconnectHandler, closeWebSocketServer, WS_SERVER_PORT } from './server';
+import { setScanRequestHandler, setConnectRequestHandler, setStopRequestHandler, setDisconnectHandler, setFaultStall, closeWebSocketServer, WS_SERVER_PORT } from './server';
 
 const app = express();
 const httpServer = createServer(app);
@@ -90,6 +90,7 @@ let replayProfile: ReplayProfile = 'profile1'; // Default replay profile
 let replayDataRate: number = 1.0; // Default 1Hz, max 2Hz
 let replayEnableInterpolation: boolean = true; // Default enabled
 let isScanning = false; // HRM discovery scan (no stream active)
+let faultStallEnabled: boolean = false; // Fault injection: stall HR emission (default off)
 
 // Track profile parameters for each profile
 let profileParameters: {
@@ -97,11 +98,13 @@ let profileParameters: {
   loseWeight: LoseWeightParams;
   getStronger: GetStrongerParams;
   feelBetter: FeelBetterParams;
+  warmupRecovery: FeelBetterParams;
 } = {
   getFitter: { ...defaultProfileParameters.getFitter },
   loseWeight: { ...defaultProfileParameters.loseWeight },
   getStronger: { ...defaultProfileParameters.getStronger },
-  feelBetter: { ...defaultProfileParameters.feelBetter }
+  feelBetter: { ...defaultProfileParameters.feelBetter },
+  warmupRecovery: { ...defaultProfileParameters.warmupRecovery }
 };
 
 // Build full state object for Socket.io (single source of truth)
@@ -116,6 +119,7 @@ function getFullState() {
     replayDataRate: replayDataRate,
     replayEnableInterpolation: replayEnableInterpolation,
     isScanning,
+    faultStallEnabled,
     wsServerPort: WS_SERVER_PORT
   };
 }
@@ -274,6 +278,9 @@ io.on('connection', (socket) => {
           case 'feelBetter':
             profileParams = { profile: 'feelBetter', params: profileParameters.feelBetter };
             break;
+          case 'warmupRecovery':
+            profileParams = { profile: 'warmupRecovery', params: profileParameters.warmupRecovery };
+            break;
         }
         updateSimulationProfile(profile, newDeviceId, profileParams);
         addLog(`Profile changed from ${oldProfile} to ${profile} while running`);
@@ -318,6 +325,9 @@ io.on('connection', (socket) => {
         case 'feelBetter':
           profileParameters.feelBetter = params.params;
           break;
+        case 'warmupRecovery':
+          profileParameters.warmupRecovery = params.params;
+          break;
       }
       
       // Update simulation if running
@@ -358,6 +368,14 @@ io.on('connection', (socket) => {
     io.emit('state', getFullState());
   });
   
+  // Handle fault injection: stall (no HR data emitted)
+  socket.on('setFaultStall', (enabled: boolean) => {
+    faultStallEnabled = typeof enabled === 'boolean' ? enabled : false;
+    setFaultStall(faultStallEnabled);
+    addLog(faultStallEnabled ? 'Fault injection: Stall ON (no data emitted)' : 'Fault injection: Stall OFF (data sent normally)');
+    io.emit('state', getFullState());
+  });
+  
   // Handle start/stop
   socket.on('start', () => {
     if (isRunning) {
@@ -383,6 +401,9 @@ io.on('connection', (socket) => {
           break;
         case 'feelBetter':
           profileParams = { profile: 'feelBetter', params: profileParameters.feelBetter };
+          break;
+        case 'warmupRecovery':
+          profileParams = { profile: 'warmupRecovery', params: profileParameters.warmupRecovery };
           break;
       }
       startSimulation(currentProfile, deviceId, currentNoiseVariance, 1000, profileParams);

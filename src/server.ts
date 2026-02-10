@@ -53,6 +53,17 @@ export function setDisconnectHandler(fn: (() => void) | null): void {
   disconnectHandler = fn;
 }
 
+// Fault injection: when true, no HR or disconnect messages are sent to the client
+let faultStallEnabled = false;
+
+export function setFaultStall(enabled: boolean): void {
+  faultStallEnabled = enabled;
+}
+
+export function getFaultStall(): boolean {
+  return faultStallEnabled;
+}
+
 // Create WebSocket server
 const wss = new WebSocketServer({ port: PORT });
 
@@ -140,6 +151,9 @@ wss.on('connection', (ws: WebSocket) => {
 export function broadcastHeartRate(deviceId: string, heartRate: number, action: 'hr' | 'disconnected' = 'hr'): void {
   if (!connectedClient || connectedClient.readyState !== WebSocket.OPEN) {
     // No client connected, silently skip
+    return;
+  }
+  if (faultStallEnabled) {
     return;
   }
 

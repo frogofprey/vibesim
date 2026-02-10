@@ -1,6 +1,6 @@
 import { broadcastHeartRate } from './server';
 
-export type Profile = 'getFitter' | 'loseWeight' | 'getStronger' | 'feelBetter';
+export type Profile = 'getFitter' | 'loseWeight' | 'getStronger' | 'feelBetter' | 'warmupRecovery';
 
 // Profile-specific parameter interfaces
 export interface GetFitterParams {
@@ -34,7 +34,8 @@ export type ProfileParameters =
   | { profile: 'getFitter'; params: GetFitterParams }
   | { profile: 'loseWeight'; params: LoseWeightParams }
   | { profile: 'getStronger'; params: GetStrongerParams }
-  | { profile: 'feelBetter'; params: FeelBetterParams };
+  | { profile: 'feelBetter'; params: FeelBetterParams }
+  | { profile: 'warmupRecovery'; params: FeelBetterParams };
 
 // Default parameter values matching current hardcoded values
 export const defaultProfileParameters = {
@@ -58,6 +59,11 @@ export const defaultProfileParameters = {
   feelBetter: {
     baseHR: 100,
     variationAmplitude: 10,
+    variationPeriod: 45
+  } as FeelBetterParams,
+  warmupRecovery: {
+    baseHR: 80,
+    variationAmplitude: 3,
     variationPeriod: 45
   } as FeelBetterParams
 };
@@ -174,6 +180,8 @@ export function getBaseHeartRate(profileParams: ProfileParameters, elapsedSecond
     return getStronger(elapsedSeconds, profileParams.params);
   } else if (profileParams.profile === 'feelBetter') {
     return feelBetter(elapsedSeconds, profileParams.params);
+  } else if (profileParams.profile === 'warmupRecovery') {
+    return feelBetter(elapsedSeconds, profileParams.params);
   } else {
     throw new Error(`Unknown profile: ${(profileParams as any).profile}`);
   }
@@ -224,6 +232,9 @@ export function startSimulation(
         break;
       case 'feelBetter':
         params = { profile: 'feelBetter', params: defaultProfileParameters.feelBetter };
+        break;
+      case 'warmupRecovery':
+        params = { profile: 'warmupRecovery', params: defaultProfileParameters.warmupRecovery };
         break;
     }
   }
@@ -304,6 +315,9 @@ export function updateSimulationProfile(profile: Profile, deviceId?: string, pro
       case 'feelBetter':
         newParams = { profile: 'feelBetter', params: defaultProfileParameters.feelBetter };
         break;
+      case 'warmupRecovery':
+        newParams = { profile: 'warmupRecovery', params: defaultProfileParameters.warmupRecovery };
+        break;
     }
     simulationState.profileParams = newParams;
   }
@@ -380,6 +394,7 @@ function validateProfileParameters(params: ProfileParameters): void {
       }
       break;
     case 'feelBetter':
+    case 'warmupRecovery':
       if (params.params.baseHR < 50 || params.params.baseHR > 200) {
         throw new Error('Base HR must be between 50 and 200 BPM');
       }

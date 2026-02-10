@@ -6,7 +6,7 @@ const profile = (args[0] || 'loseWeight') as Profile;
 const deviceId = args[1] || 'simulator-001';
 const variance = args[2] ? parseFloat(args[2]) : 2;
 
-const validProfiles: Profile[] = ['getFitter', 'loseWeight', 'getStronger', 'feelBetter'];
+const validProfiles: Profile[] = ['getFitter', 'loseWeight', 'getStronger', 'feelBetter', 'warmupRecovery'];
 
 if (!validProfiles.includes(profile)) {
   console.error(`Invalid profile: ${profile}`);
