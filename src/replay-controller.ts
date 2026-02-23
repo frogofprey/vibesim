@@ -248,7 +248,12 @@ function scheduleNextHR(): void {
   const nextPoint = interpolatedData[replayState.currentIndex];
   const T0 = interpolatedData[0].time;
   const T_next = nextPoint.time;
+  // Schedule next point so replay time advances 1 sec per 1 sec wall time (startTime set at start or on skip)
   let delayMs = (replayState.startTime + (T_next - T0) * 1000) - Date.now();
+  // Cap only when delay would be large (e.g. after skip before we updated startTime); normal replay stays real-time
+  const intervalMs = 1000 / replayState.dataRate;
+  const maxDelayMs = Math.max(intervalMs * 2, 2000);
+  if (delayMs > maxDelayMs) delayMs = intervalMs;
   delayMs = Math.max(10, delayMs); // min 10ms to avoid tight loops if slightly behind
   
   const timeoutId = setTimeout(() => {
@@ -445,6 +450,15 @@ export function skipAheadOneMinute(): void {
   const oldTime = currentPoint.time;
   const newTime = replayState.interpolatedData[newIndex].time;
   replayState.currentIndex = newIndex;
+  
+  // Align wall clock so the skipped-to position is "now"; otherwise we'd wait for wall time to catch up and no HR would be sent
+  const T0 = replayState.interpolatedData[0].time;
+  replayState.startTime = Date.now() - (newTime - T0) * 1000;
+  
+  // Clear any pending timeouts and reschedule from the new position
+  replayState.timeoutIds.forEach((id) => clearTimeout(id));
+  replayState.timeoutIds = [];
+  scheduleNextHR();
   
   console.log(`Skipped ahead 1 minute: from t=${oldTime.toFixed(2)}s to t=${newTime.toFixed(2)}s`);
 }
