@@ -3,7 +3,7 @@ import * as path from 'path';
 import { broadcastHeartRate } from './server';
 import { generateGaussianNoise } from './simulator';
 
-export type ReplayProfile = 'profile1' | 'profile2' | 'profile3' | 'profile4';
+export type ReplayProfile = 'profile1' | 'profile2' | 'profile3' | 'profile4' | 'profile5';
 
 interface ReplayDataPoint {
   time: number;
@@ -78,8 +78,10 @@ function loadReplayData(profile: ReplayProfile): ReplayDataPoint[] {
     fileName = 'profile2.csv';
   } else if (profile === 'profile3') {
     fileName = 'profile3.csv';
-  } else {
+  } else if (profile === 'profile4') {
     fileName = 'profile4.csv';
+  } else {
+    fileName = 'profile5.csv';
   }
   const filePath = path.join(__dirname, '..', fileName);
   
