@@ -28,7 +28,7 @@
 - **FR-16** Emit simulated HR in the same JSON format as the WebSocket server; support start/stop and variance updates while running.
 
 ### Replay
-- **FR-17** Replay HR from CSV files (`profile1.csv`, `profile2.csv`, `profile3.csv`, `profile4.csv` / State Test) with columns time and heart rate.
+- **FR-17** Replay HR from CSV files (`profile1.csv`, `profile2.csv`, `profile3.csv`, `profile4.csv` / State Test, `profile5.csv` / Zone 4/5 Redline, `profile6.csv` / LLM Test) with columns time and heart rate.
 - **FR-18** Support configurable replay data rate (0.1–2.0 Hz) and optional interpolation; user-selected rate is primary (interpolation spacing = 1/dataRate), with 400 ms minimum between points as a fallback to avoid overloading the interface.
 - **FR-19** Support “skip ahead” by one minute in replay time while replay is running.
 - **FR-20** Apply configurable noise variance to replayed HR; support toggling interpolation on/off (when not running).
