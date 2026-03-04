@@ -28,6 +28,13 @@ export function isValidBleDeviceId(deviceId: string): boolean {
   return normalizeAddress(deviceId).length === 12;
 }
 
+/**
+ * Return true if the device ID normalizes to the all-zeros BLE address (00:00:00:00:00:00).
+ */
+export function isAllZerosAddress(deviceId: string): boolean {
+  return normalizeAddress(deviceId) === '000000000000';
+}
+
 // Heart Rate Service UUID
 const HEART_RATE_SERVICE_UUID = '180d';
 // Heart Rate Measurement Characteristic UUID

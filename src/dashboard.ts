@@ -16,7 +16,7 @@ import {
   GetStrongerParams,
   FeelBetterParams
 } from './simulator';
-import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDeviceId, stopHRMScan, isValidBleDeviceId } from './ble-controller';
+import { startBLE, stopBLE, getCurrentDeviceId, startHRMScan, startBLEWithDeviceId, stopHRMScan, isValidBleDeviceId, isAllZerosAddress } from './ble-controller';
 import { startReplay, stopReplay, updateReplayDataRate, updateReplayNoiseVariance, skipAheadOneMinute, ReplayProfile } from './replay-controller';
 // Start WebSocket server (but don't capture its logs immediately)
 import './server';
@@ -517,6 +517,10 @@ setConnectRequestHandler((deviceId, reply) => {
     reply({ action: 'connect_rejected', error: 'invalid_device_id', message: 'Invalid device ID; expected BLE address (e.g. A0:9E:1A:DD:2D:5F).' });
     return;
   }
+  if (isAllZerosAddress(deviceId)) {
+    reply({ action: 'connect_rejected', error: 'address_all_zeros', message: 'BLE address cannot be all zeros.' });
+    return;
+  }
   currentMode = 'Live';
   isRunning = true;
   io.emit('state', getFullState());
@@ -534,6 +538,7 @@ setConnectRequestHandler((deviceId, reply) => {
         session_already_active: 'A stream is already active.',
         scan_in_progress: 'HRM scan in progress.',
         invalid_device_id: 'Invalid device ID format.',
+        address_all_zeros: 'BLE address cannot be all zeros.',
         device_not_found: 'Device not found within 30s.',
         connection_failed: 'Connection or subscribe failed.'
       };

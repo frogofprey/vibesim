@@ -5,7 +5,7 @@
 ### BLE / Live Mode
 - **FR-1** Scan for BLE devices advertising the Heart Rate Service (UUID `180d`) and report name and device ID (address).
 - **FR-2** Run a discovery-only HRM scan for a configurable duration (default 60 s), with optional early stop; report devices via `scan_device` and `scan_complete`.
-- **FR-3** Connect to a specific BLE HRM by device ID (12 hex chars, optional colons); validate format; scan until device is seen (with HRM service), then connect; timeout after 30 s if not found.
+- **FR-3** Connect to a specific BLE HRM by device ID (12 hex chars, optional colons); validate format. Reject all-zeros address (e.g. `00:00:00:00:00:00`) with `connect_rejected`, error `address_all_zeros`; do not start BLE. Otherwise scan until device is seen (with HRM service), then connect; timeout after 30 s if not found.
 - **FR-4** After connection, discover Heart Rate Measurement characteristic (`2a37`), subscribe to notifications, decode 8- and 16-bit HR values per BLE HRM spec.
 - **FR-5** Apply a low-pass filter (0.6×current + 0.4×last) to HR before broadcasting.
 - **FR-6** On BLE disconnect, send a `disconnected` action over the WebSocket and clean up listeners.
@@ -19,6 +19,7 @@
   - **`scan`**: Start 60 s HRM scan; reply `scan_started` or `scan_rejected`; stream `scan_device` / `scan_complete`. Not allowed if a stream is active or a scan is already running.
   - **`connect:<deviceId>`**: Start live BLE session for that device; reply `connect_started`, `connect_rejected`, or `connect_failed` with error code. Not allowed if stream active or scan in progress.
   - **`stop`**: If HRM scan active → stop scan, set `isScanning` false, emit state, reply `stopped` (what: scan). If stream active → stop stream (BLE/Sim/Replay), set `isRunning` false, emit state, reply `stopped` (what: stream, mode). Else reply `stop_rejected` (nothing_to_stop).
+  - **Client disconnect**: When the WebSocket client disconnects, stop any active HRM scan or stream (same behavior as the `stop` command); no reply is sent (client is gone).
 - **FR-12** Send scan results as JSON (`scan_device`, `scan_complete` with devices list and duration).
 
 ### Simulator
@@ -69,7 +70,7 @@
 
 ### Usability and Robustness
 - **NFR-6** Single WebSocket client: new connection displaces the previous one; no multi-client broadcast.
-- **NFR-7** Reject invalid operations with clear replies (e.g. `scan_rejected`, `connect_rejected`, `stop_rejected`) and error codes/messages.
+- **NFR-7** Reject invalid operations with clear replies (e.g. `scan_rejected`, `connect_rejected` with error codes such as `invalid_device_id`, `address_all_zeros`, `stop_rejected`) and messages.
 - **NFR-8** Do not allow starting a stream or connect while another stream is active or an HRM scan is in progress; do not allow starting a scan while a stream is active or a scan is already running.
 
 ### Reliability and Operability
