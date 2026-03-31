@@ -4,7 +4,7 @@ A Node.js TypeScript project for scanning Bluetooth Low Energy (BLE) devices tha
 
 ## Prerequisites
 
-- Node.js (v16 or higher)
+- **Node.js 20, 22, or 24+** (required for development and unit tests; Vitest 4 matches this engine range). Running only prebuilt `dist/` output without devDependencies may work on older Node, but it is not the supported setup.
 - Windows 11
 - Bluetooth adapter enabled
 
@@ -16,6 +16,8 @@ npm install
 ```
 
 **Note:** `noble-winrt` is a pure JavaScript package that doesn't require native compilation, so no Visual Studio build tools are needed!
+
+**Supply chain:** `package.json` defines npm **`overrides`** so **`noble`** and **`noble-winrt`** use a current **`debug`** release (their transitive versions on npm are outdated). After install, **`npm audit`** should report zero vulnerabilities.
 
 2. Build the TypeScript project:
 ```bash
@@ -36,7 +38,8 @@ Port must be between 1 and 65535. Invalid values are ignored and the default (80
 ## Usage
 
 ### Main Application
-Run the complete system (Dashboard + WebSocket Server):
+Run the complete system (Dashboard + WebSocket Server). Ensure you have built first (`npm run build`); run a new build after changing TypeScript.
+
 ```bash
 npm start
 ```
@@ -113,12 +116,13 @@ The test client will:
 
 ### Heart Rate Simulator
 
-The simulator module provides four fitness profiles with realistic heart rate curves:
+The simulator module provides five fitness profiles with realistic heart rate curves:
 
 - **`getFitter`** - HIIT spikes: 20-second high-intensity intervals (120-180 BPM) followed by 40-second recovery
 - **`loseWeight`** - Steady-state Zone 2: Consistent Zone 2 heart rate (130-140 BPM)
 - **`getStronger`** - Bursts: 15-second strength training bursts (110-170 BPM) with 75-second rest periods
 - **`feelBetter`** - Low intensity: Gentle exercise (90-110 BPM)
+- **`warmupRecovery`** - Warmup/recovery curve (same shape as `feelBetter`; different default parameters, e.g. base HR 80)
 
 All profiles include Gaussian noise (default 2 BPM variance) for realism.
 
@@ -134,15 +138,16 @@ npm run simulator loseWeight simulator-002 2
 npm run simulator getStronger my-device 1.5
 ```
 
-**Run tests:**
+**Run tests** (Vitest 4; sources under `src/**/*.test.ts`):
 ```bash
 npm run test:unit
+npm run test:watch
 ```
 
 The tests verify:
 - Gaussian noise distribution is correct
 - Noise stays within 2 BPM of the base curve
-- All four profiles produce expected heart rate patterns
+- All profiles produce expected heart rate patterns
 
 ### Web Dashboard
 
@@ -174,6 +179,14 @@ The dashboard uses Socket.io for real-time communication. HR data is broadcast o
 
 ## Dependencies
 
-- `noble-winrt`: Windows Runtime BLE library for Node.js (no native compilation required)
-- `typescript`: TypeScript compiler
-- `@types/node`: TypeScript definitions for Node.js
+Runtime (see `package.json` for versions):
+
+- `noble-winrt` — Windows Runtime BLE (no native compilation for this path)
+- `ws`, `express`, `socket.io` — WebSocket server and dashboard
+
+Development:
+
+- `typescript`, `@types/*` — compile-time types
+- `vitest` — unit tests (`npm run test:unit`)
+
+Functional requirements and NFRs are summarized in [`docs/requirements.md`](docs/requirements.md).

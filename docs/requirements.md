@@ -45,7 +45,7 @@
 - **FR-28** Show a real-time, scrollable system log (console + app messages); support copying log to clipboard; optional filter (e.g. hide interpolated messages).
 
 ### Application Lifecycle
-- **FR-29** Start both WebSocket server and dashboard from one entry point (`npm start` / `main`).
+- **FR-29** Start both WebSocket server and dashboard from one entry point (`npm start` / `main`); assumes a current build (`npm run build` produces `dist/`).
 - **FR-30** Support graceful shutdown: stop any active stream (BLE/Sim/Replay), close Socket.io, close HTTP server, close WebSocket server, then exit with code 0.
 - **FR-31** Support shutdown via keyboard: “q” + Enter in the terminal (when stdin is a TTY) to trigger the same graceful shutdown without relying on Ctrl+C.
 - **FR-32** If shutdown does not complete within a set time (e.g. 4 s), exit anyway (timeout fallback); ensure shutdown runs only once (guard against repeated “q” or Ctrl+C).
@@ -60,8 +60,8 @@
 ## Non-Functional Requirements
 
 ### Platform and Environment
-- **NFR-1** Run on Node.js (v16+), TypeScript build to JavaScript.
-- **NFR-2** Support Windows 11 for BLE; use `noble-winrt` (no native compilation).
+- **NFR-1** Run on Node.js **20, 22, or 24+** (aligned with Vitest 4 engine requirements for development and `npm run test:unit`). Build TypeScript to JavaScript with **`npm run build`** (`tsc` → `dist/`). Running only the prebuilt `dist/` output without devDependencies may work on older Node versions, but that combination is not the documented target.
+- **NFR-2** Support Windows 11 for BLE; use `noble-winrt` (no native compilation for that path). **`package.json` `overrides`** force **`debug@^4.3.4`** for **`noble`** and **`noble-winrt`** so transitive dependencies from npm (unmaintained `noble`) do not pull vulnerable legacy `debug` / `ms` versions.
 - **NFR-3** WebSocket server port configurable via environment (`WS_PORT`) or CLI (`--ws-port`); invalid port fallback to default 8080.
 
 ### Performance and Capacity
@@ -79,12 +79,13 @@
 
 ### Maintainability and Quality
 - **NFR-11** Use TypeScript and standard Node/Express/Socket.io/ws types where applicable.
-- **NFR-12** Unit tests (e.g. Vitest) for simulator behavior (noise distribution, profile curves); optional test client/server for WebSocket single-client and message flow.
+- **NFR-12** Unit tests with **Vitest 4** (`npm run test:unit`, `npm run test:watch`); include **`src/**/*.test.ts`** only (per `vitest.config.ts`) so compiled **`dist/*.test.js`** is not executed. Cover simulator behavior (noise distribution, profile curves); optional test client/server for WebSocket single-client and message flow.
 
 ### Security and Configuration
 - **NFR-13** No authentication in the current design; dashboard and WebSocket server are intended for local or controlled use.
 - **NFR-14** CORS for Socket.io allowed for all origins (`*`) to support local dashboard access.
+- **NFR-15** After `npm install`, **`npm audit` SHOULD report zero vulnerabilities**; maintainers address new findings (e.g. toolchain upgrades, **`overrides`** for unmaintained BLE transitive deps) and keep **`overrides`** documented as intentional until upstream packages ship fixes.
 
 ---
 
-*Derived from the vibesim codebase (src/, public/, README.md, package.json).*
+*Derived from the vibesim codebase (src/, public/, docs/, README.md, package.json, vitest.config.ts).*
