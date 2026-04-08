@@ -24,16 +24,17 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "noble-winrt": "^0.1.0",
-    "ws": "^8.16.0",
     "express": "^4.18.2",
-    "socket.io": "^4.6.1"
+    "noble-winrt": "^0.1.0",
+    "socket.io": "^4.6.1",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
     "@types/node": "^20.10.0",
     "@types/ws": "^8.5.10",
-    "@types/express": "^4.17.21",
     "typescript": "^5.3.3",
+    "vite": "^8.0.7",
     "vitest": "^4.1.2"
   },
   "overrides": {
