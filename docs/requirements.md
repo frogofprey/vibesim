@@ -4,7 +4,7 @@
 
 ### BLE / Live Mode
 - **FR-1** Scan for BLE devices advertising the Heart Rate Service (UUID `180d`) and report name and device ID (address).
-- **FR-2** Run a discovery-only HRM scan for a configurable duration (default 60 s), with optional early stop; report devices via `scan_device` and `scan_complete`.
+- **FR-2** Run a discovery-only HRM scan with a default duration of 60 s and optional early stop; duration is configurable in internal APIs and currently invoked as 60 s in dashboard/WS control flows; report devices via `scan_device` and `scan_complete`.
 - **FR-3** Connect to a specific BLE HRM by device ID (12 hex chars, optional colons); validate format. Reject all-zeros address (e.g. `00:00:00:00:00:00`) with `connect_rejected`, error `address_all_zeros`; do not start BLE. Otherwise scan until device is seen (with HRM service), then connect; timeout after 30 s if not found.
 - **FR-4** After connection, discover Heart Rate Measurement characteristic (`2a37`), subscribe to notifications, decode 8- and 16-bit HR values per BLE HRM spec.
 - **FR-5** Apply a low-pass filter (0.6×current + 0.4×last) to HR before broadcasting.
@@ -32,9 +32,9 @@
 - **FR-17** Replay HR from CSV files (`profile1.csv`, `profile2.csv`, `profile3.csv`, `profile4.csv` / State Test, `profile5.csv` / Zone 4/5 Redline, `profile6.csv` / LLM Test, `profile7.csv` / Interval Test (3min)) with columns time and heart rate.
 - **FR-18** Support configurable replay data rate (0.1–2.0 Hz) and optional interpolation; user-selected rate is primary (interpolation spacing = 1/dataRate), with 400 ms minimum between points as a fallback to avoid overloading the interface.
 - **FR-19** Support “skip ahead” by one minute in replay time while replay is running.
-- **FR-20** Apply configurable noise variance to replayed HR; support toggling interpolation on/off (when not running).
-- **FR-21** Emit each replay point at the wall-clock time that corresponds to its replay time (1:1 real-time alignment; no time warp), so downstream “state at time T” is valid.
-- **FR-22** Enforce minimum 400 ms between consecutive replay points (2.5 Hz cap) as a safety fallback; primary spacing is driven by the selected data rate.
+- **FR-20** Apply configurable noise variance to replayed HR and support toggling interpolation on/off (when not running). Current behavior applies noise to interpolated points while preserving original CSV points without added noise.
+- **FR-21** Emit replay points using wall-clock-aligned scheduling (targeting 1:1 replay-time progression) with bounded catch-up behavior under scheduler lag.
+- **FR-22** During interpolation generation, enforce a 400 ms minimum spacing fallback for inserted points to avoid overloading the interface; primary spacing remains driven by the selected data rate.
 
 ### Dashboard (UI and Control)
 - **FR-23** Provide a web UI (HTTP on port 3000) with mode toggle: Live (BLE), Sim, Replay.
@@ -53,7 +53,7 @@
 ---
 
 ### Fault Injection
-- **FR-33** Support fault injection at the WebSocket broadcast layer (all sources: Live, Sim, Replay). **Stall**: toggle (default off); when on, no HR or disconnect messages are sent. **Freeze HR**: toggle (default off); when on, the first HR after enable is held and sent for every subsequent HR broadcast until disabled; disconnect events unchanged. **Spike**: one-shot impulse with direction (high = 200 BPM, low = 50 BPM) and width in seconds (0.1–60); for that duration override HR to the spiked value, then resume normal; only HR is overridden, not disconnect. Order of application: stall (no send), then spike (if in window), then freeze, then actual value.
+- **FR-33** Support fault injection at the WebSocket broadcast layer (all sources: Live, Sim, Replay). **Stall**: toggle (default off); when on, no HR or disconnect messages are sent. **Freeze HR**: toggle (default off); when on, the first HR after enable is held and sent for every subsequent HR broadcast until disabled; disconnect events unchanged. **Spike**: one-shot impulse with direction (high = 200 BPM, low = 50 BPM) and width in seconds (0.1–60); for that duration override HR to the spiked value, then resume normal; only HR is overridden, not disconnect. Effective precedence: stall blocks send; otherwise spike override applies while active; otherwise freeze applies when enabled; otherwise actual value is sent.
 
 ---
 
